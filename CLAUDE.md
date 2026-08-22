@@ -89,6 +89,9 @@ a specific JD is the tuner's separate concern. Don't merge them.
 ```bash
 npm install       # builds better-sqlite3 natively
 npm run db:push   # create/update tables from schema.ts
+npm run db:sync   # snapshot the DB into the one git-tracked file, then commit
+npm run db:import # replace the local DB from that snapshot, after confirming
+npm run db:export # ad-hoc dated export, untracked
 npm run dev       # localhost:3000
 npm run test      # node:test — strength scorer + schema integrity
 npm run typecheck
@@ -112,6 +115,34 @@ Dev machine is **Windows**. Two failures have already come from ignoring that:
 
 Prefer script files over inline `node -e` in npm scripts — quoting differs
 across cmd.exe, PowerShell and bash.
+
+- **Never move the database by copying `data/vaultcv.db`.** SQLite runs in WAL
+  mode, so recent writes sit in the `-wal` sidecar until they're checkpointed.
+  On a real vault that sidecar was 4 MB against a 143 KB main file, and holding
+  every bullet, half the entries and all the resume skills. Copying the main
+  file alone produces a database that opens cleanly and looks like less work was
+  done — no error, nothing to notice. `npm run db:export` uses `VACUUM INTO`,
+  which writes one fully checkpointed file and is safe while the app is running.
+  `db:import` validates the file, prints a before/after row count, backs up the
+  current database and then asks.
+
+- **The vault syncs between machines through git, as a snapshot.** Exactly one
+  path is tracked — `app/data/exports/vaultcv-sync.db`, written by `db:sync`.
+  The live `data/vaultcv.db` stays ignored, because the app writes to it
+  constantly and a file captured mid-write is missing whatever is in the WAL.
+  Dated exports and pre-import backups are ignored too, so history stays one
+  file rather than a new blob per sync.
+
+  SQLite is binary, so git cannot merge it. Editing the vault on both machines
+  before syncing produces a conflict whose only resolutions are "keep mine" or
+  "keep theirs" — one machine's work is lost wholesale. `db:import` prints a
+  row-count diff and flags any table that would *lose* rows, and backs up first,
+  which makes a wrong pull recoverable rather than final. That is a mitigation,
+  not a fix; the rule is still one machine at a time.
+
+  The snapshot contains real personal data and is committed only because the
+  repo is private. If it ever goes public, the file has to come out of the
+  history, not just the working tree.
 
 ---
 

@@ -3,11 +3,30 @@ node_modules/
 out/
 build/
 
-# Local database — your entire career history. Never commit.
-data/
+# The live database and its WAL sidecars never go in git. The app writes to
+# them constantly, and a file captured mid-write is missing whatever is still
+# sitting in the WAL.
+#
+# `data/*` rather than `data/`, because git cannot re-include anything inside a
+# directory that was excluded as a directory — and one file below needs to be.
+data/*
 *.db
 *.db-journal
 *.db-wal
+*.db-shm
+
+# The one exception: a single snapshot that syncs between machines.
+#
+# Written by `npm run db:sync`, which VACUUMs into it, so what lands in git is
+# always fully checkpointed and consistent. Exactly one tracked path, so history
+# stays one file rather than a new blob per dated export.
+#
+# This holds your address, phone number and employment history. It is here
+# because this repo is private. If that ever changes, the file has to come out
+# of the history, not just the working tree.
+!data/exports/
+data/exports/*
+!data/exports/vaultcv-sync.db
 
 # Generated DDL. `db:push` is the source of truth for structure; these files
 # exist only so the schema tests have something to run against.
