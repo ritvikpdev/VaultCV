@@ -1,0 +1,149 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    @apply bg-canvas text-ink antialiased;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-card border border-line bg-surface;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm
+           font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-ink text-white hover:bg-ink/90;
+  }
+  .btn-accent {
+    @apply btn bg-accent text-white hover:bg-accent/90;
+  }
+  .btn-ghost {
+    @apply btn border border-line bg-surface text-ink hover:bg-canvas;
+  }
+
+  .field {
+    @apply w-full rounded-lg border border-transparent bg-canvas px-3 py-2 text-sm
+           outline-none transition-colors focus:border-accent focus:bg-surface;
+  }
+  .label {
+    @apply mb-1.5 block text-sm font-medium text-ink;
+  }
+  .hint {
+    @apply text-xs text-muted;
+  }
+}
+
+/*
+ * Resume document surface.
+ *
+ * Every value here is a CSS variable written from the resume_styles row. The
+ * on-screen preview and the Puppeteer print target mount the SAME component, so
+ * the exported PDF cannot drift from what you see. Sizes are in points because
+ * that is what the customize sliders speak.
+ */
+.resume-doc {
+  --r-font-family: "Times New Roman", Times, serif;
+  --r-base-size: 10pt;
+  --r-name-size: 21pt;
+  --r-heading-size: 11pt;
+  --r-line-height: 1.25;
+  --r-section-gap: 10pt;
+  --r-entry-gap: 6pt;
+  --r-bullet-gap: 2pt;
+  --r-margin-x: 0.5in;
+  --r-margin-y: 0.5in;
+  --r-accent: #000000;
+
+  font-family: var(--r-font-family);
+  font-size: var(--r-base-size);
+  line-height: var(--r-line-height);
+  padding: var(--r-margin-y) var(--r-margin-x);
+  color: #000;
+  background: #fff;
+  /* Margins on the first block would otherwise collapse through the padding
+     and shift content off the top of the page. */
+  display: flow-root;
+}
+
+/* The first block never needs a leading gap — the page margin is the gap. */
+.resume-doc > .r-block:first-child,
+.resume-doc > *:first-child > .r-block {
+  margin-top: 0 !important;
+}
+
+.resume-doc .r-name {
+  font-size: var(--r-name-size);
+  font-weight: 700;
+  text-align: center;
+}
+
+.resume-doc .r-section + .r-section {
+  margin-top: var(--r-section-gap);
+}
+
+.resume-doc .r-heading {
+  font-size: var(--r-heading-size);
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--r-accent);
+}
+
+/* Heading style variants, set by the customize tab. */
+.resume-doc[data-heading-style="underline"] .r-heading {
+  text-decoration: underline;
+}
+.resume-doc[data-heading-style="rule"] .r-heading {
+  border-bottom: 0.5pt solid currentColor;
+  padding-bottom: 1pt;
+}
+.resume-doc[data-heading-style="plain"] .r-heading {
+  text-transform: none;
+}
+
+.resume-doc .r-bullet + .r-bullet {
+  margin-top: var(--r-bullet-gap);
+}
+
+/*
+ * Pagination atoms.
+ *
+ * The preview paginates in JavaScript; Puppeteer's export is paginated by
+ * Chrome. These rules are what make the two agree — both treat an entry as
+ * unbreakable and keep a section heading with what follows it. Without them the
+ * PDF would break mid-entry while the preview didn't, which is precisely the
+ * preview/PDF drift the single-renderer rule exists to prevent.
+ */
+.resume-doc .r-entry {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.resume-doc .r-heading {
+  break-after: avoid;
+  page-break-after: avoid;
+  break-inside: avoid;
+}
+
+/* Page break marker, draggable in the customize tab. */
+.resume-doc .r-page-break {
+  break-after: page;
+}
+
+@media print {
+  body {
+    background: #fff;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .resume-doc {
+    /* Puppeteer supplies the page box; the doc must not add its own. */
+    box-shadow: none;
+  }
+}
