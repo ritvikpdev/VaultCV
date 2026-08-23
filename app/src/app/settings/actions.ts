@@ -45,6 +45,11 @@ export async function saveProfile(formData: FormData): Promise<ActionResult> {
     .run();
 
   revalidatePath("/settings");
+  // Every resume's header reads this one shared profile, unlike other actions
+  // here which are scoped to a single resumeId. Without this, a resume page
+  // already open in the client Router Cache keeps showing the old label/url
+  // until a hard reload.
+  revalidatePath("/resume/[id]", "page");
   return { ok: true };
 }
 

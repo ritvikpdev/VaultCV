@@ -85,6 +85,10 @@ export function ProfileForm({ profile }: { profile: Profile }) {
 
       <div className="mt-5">
         <label className="label">Links</label>
+        <p className="hint mb-2">
+          The label is what prints on the resume; it's a live link to the URL
+          underneath.
+        </p>
         <div className="space-y-2">
           {links.map((link, i) => (
             <div key={i} className="flex gap-2">

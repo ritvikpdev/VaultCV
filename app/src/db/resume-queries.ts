@@ -13,6 +13,7 @@ import {
   resumeStyles,
   vaultBullets,
   vaultEntries,
+  vaultSections,
   vaultSkills,
 } from "./schema";
 import {
@@ -168,7 +169,8 @@ export function vaultOptionsForSection(resumeId: number, sectionId: number) {
     .from(resumeSections)
     .where(eq(resumeSections.id, sectionId))
     .get();
-  if (!section) return { entries: [], skills: [], usedEntryIds: new Set<number>() };
+  if (!section)
+    return { sections: [], entries: [], skills: [], usedEntryIds: new Set<number>() };
 
   const usedEntryIds = new Set(
     db
@@ -181,7 +183,8 @@ export function vaultOptionsForSection(resumeId: number, sectionId: number) {
 
   // Every vault entry, not just one section's. Vault sections are user-defined
   // now, so a resume section can't infer which one it corresponds to — the
-  // picker offers all of them and lets the user choose.
+  // picker offers all of them, grouped by their vault section, and lets the
+  // user choose which one to draw from.
   const entries = db
     .select()
     .from(vaultEntries)
@@ -202,13 +205,25 @@ export function vaultOptionsForSection(resumeId: number, sectionId: number) {
     else bulletsByEntry.set(b.entryId, [b]);
   }
 
+  const entryIdToSectionId = new Map(entries.map((e) => [e.id, e.sectionId]));
+
+  // Creation order, not alphabetical by category. An import inserts skills in
+  // the order the source resume listed them, so ordering by id reproduces
+  // "Languages, Frameworks, Databases, Tools" rather than sorting it into
+  // "Databases, Frameworks, Languages, Tools" — which is not what anyone wrote.
+  const skills = db.select().from(vaultSkills).orderBy(asc(vaultSkills.id)).all();
+
   return {
+    sections: db
+      .select()
+      .from(vaultSections)
+      .orderBy(asc(vaultSections.displayOrder))
+      .all(),
     entries: entries.map((e) => ({ ...e, bullets: bulletsByEntry.get(e.id) ?? [] })),
-    // Creation order, not alphabetical by category. An import inserts skills in
-    // the order the source resume listed them, so ordering by id reproduces
-    // "Languages, Frameworks, Databases, Tools" rather than sorting it into
-    // "Databases, Frameworks, Languages, Tools" — which is not what anyone wrote.
-    skills: db.select().from(vaultSkills).orderBy(asc(vaultSkills.id)).all(),
+    skills: skills.map((s) => ({
+      ...s,
+      sectionId: entryIdToSectionId.get(s.sourceEntryId) ?? null,
+    })),
     usedEntryIds,
   };
 }

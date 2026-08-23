@@ -37,6 +37,7 @@ export default async function ResumePage({
   for (const section of resume.sections) {
     const opts = vaultOptionsForSection(resumeId, section.id);
     vaultData[section.id] = {
+      sections: opts.sections,
       entries: opts.entries,
       skills: opts.skills,
       usedEntryIds: [...opts.usedEntryIds],

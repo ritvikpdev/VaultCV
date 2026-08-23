@@ -50,8 +50,19 @@ export function ResumeBlockView({
         <header className="r-block">
           <div className="r-name">{resume.profile.fullName || "Your Name"}</div>
           {contact.length > 0 && (
-            <div style={{ textAlign: "center", marginTop: "2pt" }}>
-              {contact.join("  |  ")}
+            <div className="r-contact">
+              {contact.map((item, i) => (
+                <span key={i}>
+                  {i > 0 && "  |  "}
+                  {item.href ? (
+                    <a href={item.href} target="_blank" rel="noreferrer">
+                      {item.text}
+                    </a>
+                  ) : (
+                    item.text
+                  )}
+                </span>
+              ))}
             </div>
           )}
         </header>

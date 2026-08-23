@@ -163,14 +163,33 @@ export function formatDateRange(entry: {
   return [entry.startDate, end].filter(Boolean).join(" – ");
 }
 
-/** Contact line under the name: email · phone · location · links. */
-export function formatContactLine(profile: Profile): string[] {
-  return [
-    profile.email,
-    profile.phone,
-    profile.location,
-    ...profile.links.map((l) => l.url),
-  ].filter(Boolean);
+export type ContactItem = { text: string; href?: string };
+
+/**
+ * A URL as typed ("linkedin.com/in/x") isn't a valid `href` — the browser
+ * would resolve it relative to the current page instead of navigating out.
+ */
+function withScheme(url: string): string {
+  return /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`;
+}
+
+/**
+ * Contact line under the name: email · phone · location · links.
+ *
+ * A link prints as its label (e.g. "LinkedIn"), not the raw URL, with the URL
+ * carried as `href` — the whole point of the label field. Email and phone have
+ * no separate label, so they print as themselves.
+ */
+export function formatContactLine(profile: Profile): ContactItem[] {
+  const items: ContactItem[] = [];
+  if (profile.email) items.push({ text: profile.email });
+  if (profile.phone) items.push({ text: profile.phone });
+  if (profile.location) items.push({ text: profile.location });
+  for (const link of profile.links) {
+    if (!link.url) continue;
+    items.push({ text: link.label || link.url, href: withScheme(link.url) });
+  }
+  return items;
 }
 
 /** Skills grouped by category, preserving insertion order within each group. */

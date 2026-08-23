@@ -293,34 +293,84 @@ export type EntryInput = z.input<typeof entrySchema>;
 /**
  * Rebuild the derived skill index for one entry.
  *
- * Delete-then-insert rather than diffing: the index is disposable, the entry is
- * the truth, and a partial diff that goes wrong leaves matching quietly stale.
+ * Diffs by name (case-insensitive) instead of deleting and reinserting
+ * everything. `resume_skills.source_skill_id` points at these rows with
+ * `onDelete: "set null"`, so a blanket delete-then-insert would silently null
+ * that pointer on every resume that pulled a skill from this entry — and since
+ * a linked row has no `name_override` to fall back on, it would render blank.
+ * A row whose name survives keeps its id; only genuinely new names are
+ * inserted and genuinely removed ones deleted.
  */
 function reindexSkills(entryId: number) {
-  db.delete(vaultSkills).where(eq(vaultSkills.sourceEntryId, entryId)).run();
-
   const entry = db.select().from(vaultEntries).where(eq(vaultEntries.id, entryId)).get();
-  if (!entry) return;
+  if (!entry) {
+    db.delete(vaultSkills).where(eq(vaultSkills.sourceEntryId, entryId)).run();
+    return;
+  }
 
   const section = db
     .select()
     .from(vaultSections)
     .where(eq(vaultSections.id, entry.sectionId))
     .get();
-  if (section?.type !== "skill") return;
 
-  extractSkills(entry.information).forEach((skill, i) => {
-    db.insert(vaultSkills)
-      .values({
-        sourceEntryId: entryId,
-        // The entry's own label is the category — "Languages", "Frameworks".
-        category: entry.title || section.heading,
-        name: skill.name,
-        aliases: skill.aliases,
-        level: entry.level,
-        displayOrder: i,
-      })
-      .run();
+  const existing = db
+    .select()
+    .from(vaultSkills)
+    .where(eq(vaultSkills.sourceEntryId, entryId))
+    .all();
+
+  if (section?.type !== "skill") {
+    db.delete(vaultSkills).where(eq(vaultSkills.sourceEntryId, entryId)).run();
+    return;
+  }
+
+  // The entry's own label is the category — "Languages", "Frameworks".
+  const category = entry.title || section.heading;
+  const extracted = extractSkills(entry.information);
+
+  const available = new Map<string, number[]>();
+  for (const row of existing) {
+    const key = row.name.trim().toLowerCase();
+    const list = available.get(key);
+    if (list) list.push(row.id);
+    else available.set(key, [row.id]);
+  }
+
+  const claimed = new Set<number>();
+
+  db.transaction((tx) => {
+    extracted.forEach((skill, i) => {
+      const key = skill.name.trim().toLowerCase();
+      const candidates = available.get(key);
+      const id = candidates?.shift();
+
+      if (id === undefined) {
+        tx.insert(vaultSkills)
+          .values({
+            sourceEntryId: entryId,
+            category,
+            name: skill.name,
+            aliases: skill.aliases,
+            level: entry.level,
+            displayOrder: i,
+          })
+          .run();
+        return;
+      }
+
+      claimed.add(id);
+      tx.update(vaultSkills)
+        .set({ category, name: skill.name, aliases: skill.aliases, level: entry.level, displayOrder: i })
+        .where(eq(vaultSkills.id, id))
+        .run();
+    });
+
+    for (const row of existing) {
+      if (!claimed.has(row.id)) {
+        tx.delete(vaultSkills).where(eq(vaultSkills.id, row.id)).run();
+      }
+    }
   });
 }
 

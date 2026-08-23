@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 
 import { ConfirmButton, Modal } from "@/components/ui";
-import type { VaultSkill } from "@/db/schema";
+import type { VaultSection } from "@/db/schema";
 import {
   groupSkillsForEditing,
   type ResolvedResume,
@@ -46,11 +46,21 @@ import {
   SkillCategoryDialog,
   type VaultSkillTarget,
 } from "./skill-category-dialog";
-import { VaultPicker, type VaultEntryOption } from "./vault-picker";
+import {
+  VaultPicker,
+  type VaultEntryOption,
+  type VaultSkillOption,
+} from "./vault-picker";
 
 export type SectionVaultData = Record<
   number,
-  { entries: VaultEntryOption[]; skills: VaultSkill[]; usedEntryIds: number[]; usedSkillIds: number[] }
+  {
+    sections: VaultSection[];
+    entries: VaultEntryOption[];
+    skills: VaultSkillOption[];
+    usedEntryIds: number[];
+    usedSkillIds: number[];
+  }
 >;
 
 function BulletRow({
@@ -622,6 +632,7 @@ function SectionCard({
           sectionId={section.id}
           sectionLabel={def.label}
           layout={section.layout}
+          vaultSections={vault.sections}
           entries={vault.entries}
           skills={vault.skills}
           usedEntryIds={vault.usedEntryIds}

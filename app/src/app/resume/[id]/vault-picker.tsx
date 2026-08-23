@@ -1,14 +1,15 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Check } from "lucide-react";
+import { Check, ChevronLeft } from "lucide-react";
 
 import { Modal, StrengthMeter } from "@/components/ui";
-import type { VaultBullet, VaultEntry, VaultSkill } from "@/db/schema";
+import type { VaultBullet, VaultEntry, VaultSection, VaultSkill } from "@/db/schema";
 
 import { pullEntryFromVault, pullSkillsFromVault } from "../actions";
 
 export type VaultEntryOption = VaultEntry & { bullets: VaultBullet[] };
+export type VaultSkillOption = VaultSkill & { sectionId: number | null };
 
 /**
  * Pull from Vault — the one thing FlowCV has no equivalent for.
@@ -16,6 +17,12 @@ export type VaultEntryOption = VaultEntry & { bullets: VaultBullet[] };
  * Entries already used in this section are shown but disabled, which is what
  * `source_entry_id` buys: without the pointer, "have I already added this?"
  * would be a text comparison rather than a lookup.
+ *
+ * Vault sections are user-defined and unbounded in number, so the picker opens
+ * on a list of them rather than every entry at once — you choose a section,
+ * then see what's inside it. `activeSectionId` drives that drill-down; it
+ * isn't reset by the Modal itself (it stays mounted and just shows/hides), so
+ * `close()` resets it explicitly to land back on the section list next open.
  */
 export function VaultPicker({
   open,
@@ -23,6 +30,7 @@ export function VaultPicker({
   sectionId,
   sectionLabel,
   layout,
+  vaultSections,
   entries,
   skills,
   usedEntryIds,
@@ -33,13 +41,16 @@ export function VaultPicker({
   sectionId: number;
   sectionLabel: string;
   layout: "normal" | "skill";
+  vaultSections: VaultSection[];
   entries: VaultEntryOption[];
-  skills: VaultSkill[];
+  skills: VaultSkillOption[];
   usedEntryIds: number[];
   usedSkillIds: number[];
 }) {
   const used = new Set(usedEntryIds);
   const usedSkills = new Set(usedSkillIds);
+
+  const [activeSectionId, setActiveSectionId] = useState<number | null>(null);
 
   // Bullet selection per entry. Defaults to every bullet checked — pulling a job
   // and then trimming is the common motion; opting each bullet in is not.
@@ -50,6 +61,12 @@ export function VaultPicker({
   );
   const [pickedSkills, setPickedSkills] = useState<Set<number>>(new Set());
   const [pending, startTransition] = useTransition();
+
+  function close() {
+    setActiveSectionId(null);
+    setPickedSkills(new Set());
+    onClose();
+  }
 
   function toggleBullet(entryId: number, bulletId: number) {
     setSelected((prev) => {
@@ -63,25 +80,96 @@ export function VaultPicker({
   function addEntry(entryId: number) {
     startTransition(async () => {
       await pullEntryFromVault(sectionId, entryId, [...(selected[entryId] ?? [])]);
-      onClose();
+      close();
     });
   }
 
   function addSkills() {
     startTransition(async () => {
       await pullSkillsFromVault(sectionId, [...pickedSkills]);
-      onClose();
+      close();
     });
   }
 
+  // Only sections that actually hold something of the right shape are worth
+  // offering — an empty normal section in a skills picker (or vice versa) is
+  // never a valid choice.
+  const relevantSections = vaultSections.filter((vs) =>
+    layout === "skill"
+      ? skills.some((s) => s.sectionId === vs.id)
+      : entries.some((e) => e.sectionId === vs.id),
+  );
+
+  if (activeSectionId === null) {
+    return (
+      <Modal open={open} onClose={close} title={`Add to ${sectionLabel} from vault`} wide>
+        {relevantSections.length === 0 ? (
+          <p className="hint">
+            Nothing in your vault yet. Add it in My Vault first, or import a
+            resume.
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {relevantSections.map((vs) => {
+              const count =
+                layout === "skill"
+                  ? skills.filter((s) => s.sectionId === vs.id && !usedSkills.has(s.id))
+                      .length
+                  : entries.filter((e) => e.sectionId === vs.id).length;
+
+              return (
+                <button
+                  key={vs.id}
+                  onClick={() => setActiveSectionId(vs.id)}
+                  className="flex w-full items-center justify-between rounded-lg border border-line px-3 py-2.5 text-left text-sm transition-colors hover:border-accent hover:bg-accentSoft"
+                >
+                  <span className="font-medium">{vs.heading}</span>
+                  <span className="text-xs text-muted">
+                    {layout === "skill"
+                      ? `${count} available`
+                      : `${count} ${count === 1 ? "entry" : "entries"}`}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="mt-4 flex justify-end">
+          <button className="btn-ghost" onClick={close}>
+            Cancel
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
+  const activeSection = vaultSections.find((vs) => vs.id === activeSectionId);
+  const backButton = (
+    <button
+      onClick={() => setActiveSectionId(null)}
+      className="hint mb-4 flex items-center gap-1 hover:text-ink"
+    >
+      <ChevronLeft size={14} /> Back to sections
+    </button>
+  );
+
   if (layout === "skill") {
-    const available = skills.filter((s) => !usedSkills.has(s.id));
+    const available = skills.filter(
+      (s) => s.sectionId === activeSectionId && !usedSkills.has(s.id),
+    );
 
     return (
-      <Modal open={open} onClose={onClose} title={`Add skills to ${sectionLabel}`} wide>
+      <Modal
+        open={open}
+        onClose={close}
+        title={`Add skills from ${activeSection?.heading ?? "vault"}`}
+        wide
+      >
+        {backButton}
         {available.length === 0 ? (
           <p className="hint">
-            Every skill in your vault is already on this resume.
+            Every skill in this section is already on this resume.
           </p>
         ) : (
           <>
@@ -121,7 +209,7 @@ export function VaultPicker({
                 Select all {available.length}
               </button>
               <div className="flex gap-2">
-                <button className="btn-ghost" onClick={onClose}>
+                <button className="btn-ghost" onClick={close}>
                   Cancel
                 </button>
                 <button
@@ -139,16 +227,21 @@ export function VaultPicker({
     );
   }
 
+  const sectionEntries = entries.filter((e) => e.sectionId === activeSectionId);
+
   return (
-    <Modal open={open} onClose={onClose} title={`Add to ${sectionLabel} from vault`} wide>
-      {entries.length === 0 ? (
-        <p className="hint">
-          Nothing in your vault for this section yet. Add it in My Vault first,
-          or import a resume.
-        </p>
+    <Modal
+      open={open}
+      onClose={close}
+      title={`Add to ${sectionLabel} from ${activeSection?.heading ?? "vault"}`}
+      wide
+    >
+      {backButton}
+      {sectionEntries.length === 0 ? (
+        <p className="hint">Nothing in this section yet.</p>
       ) : (
         <div className="space-y-4">
-          {entries.map((entry) => {
+          {sectionEntries.map((entry) => {
             const alreadyUsed = used.has(entry.id);
             const picked = selected[entry.id] ?? new Set<number>();
 

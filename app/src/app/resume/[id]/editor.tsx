@@ -52,6 +52,8 @@ export function ResumeEditor({
   const [style, setStyle] = useState<ResumeStyle>(resume.style);
   // Reported by the paginator after measuring — a real count, not an estimate.
   const [pages, setPages] = useState(1);
+  // Reported by the paginator after measuring the header at true page width.
+  const [contactOverflows, setContactOverflows] = useState(false);
   const [, startTransition] = useTransition();
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -87,6 +89,9 @@ export function ResumeEditor({
   const previewResume: ResolvedResume = { ...resume, style };
 
   const handlePageCount = useCallback((n: number) => setPages(n), []);
+  const handleContactOverflow = useCallback((overflows: boolean) => {
+    setContactOverflows(overflows);
+  }, []);
 
   return (
     <>
@@ -145,11 +150,22 @@ export function ResumeEditor({
               {pages} page{pages === 1 ? "" : "s"}
             </p>
           </div>
+          {contactOverflows && (
+            <p className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              The contact line under your name doesn't fit on one line.
+              Shorten it in{" "}
+              <Link href="/settings" className="font-medium underline underline-offset-2">
+                Profile settings
+              </Link>{" "}
+              to keep it from running past the page.
+            </p>
+          )}
           {/* 0.72 fits an 8.5in sheet into the available column. */}
           <PagedResume
             resume={previewResume}
             scale={0.72}
             onPageCount={handlePageCount}
+            onContactOverflow={handleContactOverflow}
           />
         </div>
       </div>

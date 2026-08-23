@@ -37,11 +37,19 @@ export function PagedResume({
   resume,
   scale = 1,
   onPageCount,
+  onContactOverflow,
 }: {
   resume: ResolvedResume;
   scale?: number;
   /** Reports the real page count so callers can stop estimating it. */
   onPageCount?: (n: number) => void;
+  /**
+   * Reports whether the header's contact line (forced onto one line via
+   * `white-space: nowrap`) is wider than the page. Measured the same way as
+   * page height: on the hidden pass, at true page width, via `scrollWidth`
+   * vs. `clientWidth` rather than an estimate.
+   */
+  onContactOverflow?: (overflows: boolean) => void;
 }) {
   const blocks = buildBlocks(resume);
   const measureRef = useRef<HTMLDivElement>(null);
@@ -78,7 +86,10 @@ export function PagedResume({
         Object.entries(next).every(([k, v]) => Math.abs((prev[k] ?? 0) - v) < 0.5);
       return same ? prev : next;
     });
-  }, [styleKey, blockKey, resume]);
+
+    const contact = container.querySelector<HTMLElement>(".r-contact");
+    onContactOverflow?.(contact ? contact.scrollWidth > contact.clientWidth + 0.5 : false);
+  }, [styleKey, blockKey, resume, onContactOverflow]);
 
   const widthIn = pageWidthIn(resume.style);
   const heightIn = resume.style.pageSize === "a4" ? 11.69 : 11;
