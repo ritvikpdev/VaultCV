@@ -1,13 +1,14 @@
 import Link from "next/link";
 import { Pin } from "lucide-react";
 
-import { bootstrap } from "@/db/bootstrap";
 import {
   allGroups,
   entryCountsBySection,
   searchVault,
   vaultBlocks,
+  type SearchHit,
 } from "@/db/queries";
+import { withVault } from "@/db/session";
 
 import type { MoveTargetGroup } from "./move-entry-dialog";
 import { SectionView } from "./section-view";
@@ -20,14 +21,17 @@ export default async function VaultPage({
 }: {
   searchParams: Promise<{ section?: string; q?: string }>;
 }) {
-  bootstrap();
-
   const params = await searchParams;
   const query = params.q?.trim() ?? "";
 
-  const blocks = vaultBlocks();
-  const groups = allGroups();
-  const counts = entryCountsBySection();
+  const { blocks, groups, counts, hits } = await withVault(async () => ({
+    blocks: await vaultBlocks(),
+    groups: await allGroups(),
+    counts: await entryCountsBySection(),
+    // Loaded here rather than inside <SearchResults>: a child component renders
+    // after this function returns, outside the vault scope.
+    hits: query ? await searchVault(query) : [],
+  }));
 
   // The sidebar only draws headings and counts, so entries and their bullets
   // are stripped before crossing to the client. Sending the whole vault to
@@ -39,8 +43,7 @@ export default async function VaultPage({
 
   const sections = blocks.flatMap((b) => b.sections);
   const requestedId = Number(params.section);
-  const active =
-    sections.find((s) => s.id === requestedId) ?? sections[0] ?? null;
+  const active = sections.find((s) => s.id === requestedId) ?? sections[0] ?? null;
 
   // Where an entry in the open section may be moved: same kind only, itself
   // excluded, grouped the way the sidebar files them. Built here because the
@@ -62,29 +65,24 @@ export default async function VaultPage({
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">My Vault</h1>
         <p className="hint mt-1">
-          Everything you have done, entered once, organised however you like.
-          Resumes draw from here.
+          Everything you have done, entered once, organised however you like. Resumes draw from
+          here.
         </p>
       </div>
 
       <div className="flex gap-8">
-        <VaultSidebar
-          blocks={sidebarBlocks}
-          counts={counts}
-          activeId={active?.id ?? null}
-        />
+        <VaultSidebar blocks={sidebarBlocks} counts={counts} activeId={active?.id ?? null} />
 
         {query ? (
-          <SearchResults query={query} />
+          <SearchResults query={query} hits={hits} />
         ) : active ? (
           <SectionView section={active} groups={groups} moveTargets={moveTargets} />
         ) : (
           <div className="card flex min-h-64 flex-1 flex-col items-center justify-center border-dashed p-10 text-center">
             <p className="font-medium">Your vault is empty</p>
             <p className="hint mt-1 max-w-md">
-              Nothing is predefined — create the sections you actually want, or
-              import a resume and the sections it contains will be created for
-              you.
+              Nothing is predefined — create the sections you actually want, or import a resume and
+              the sections it contains will be created for you.
             </p>
             <Link href="/vault/import" className="btn-accent mt-5">
               Import a resume
@@ -96,8 +94,7 @@ export default async function VaultPage({
   );
 }
 
-function SearchResults({ query }: { query: string }) {
-  const hits = searchVault(query);
+function SearchResults({ query, hits }: { query: string; hits: SearchHit[] }) {
   const bulletHits = hits.reduce((n, h) => n + h.bullets.length, 0);
 
   return (
@@ -105,8 +102,8 @@ function SearchResults({ query }: { query: string }) {
       <div>
         <h2 className="text-xl font-semibold">Results for &ldquo;{query}&rdquo;</h2>
         <p className="hint mt-0.5">
-          {hits.length} {hits.length === 1 ? "entry" : "entries"} · {bulletHits}{" "}
-          matching {bulletHits === 1 ? "bullet" : "bullets"}
+          {hits.length} {hits.length === 1 ? "entry" : "entries"} · {bulletHits} matching{" "}
+          {bulletHits === 1 ? "bullet" : "bullets"}
         </p>
       </div>
 
@@ -114,8 +111,7 @@ function SearchResults({ query }: { query: string }) {
         <div className="card border-dashed p-8 text-center">
           <p className="font-medium">No matches</p>
           <p className="hint mt-1">
-            Search covers bullet text, entry titles, organizations, sub-skills
-            and tags.
+            Search covers bullet text, entry titles, organizations, sub-skills and tags.
           </p>
         </div>
       ) : (
@@ -137,9 +133,7 @@ function SearchResults({ query }: { query: string }) {
             </div>
 
             {matchedHeader && bullets.length === 0 && (
-              <p className="hint mt-1">
-                Matched on the title, organization or sub-skills.
-              </p>
+              <p className="hint mt-1">Matched on the title, organization or sub-skills.</p>
             )}
 
             {bullets.length > 0 && (

@@ -4,15 +4,15 @@ import { revalidatePath } from "next/cache";
 import { asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 
-import { db } from "@/db/client";
-import { bootstrap } from "@/db/bootstrap";
-import { aiAvailable } from "@/lib/ai-provider";
+import { db, first } from "@/db/client";
+import { withVault } from "@/db/session";
+import { getAiConfig } from "@/db/ai-config";
+import { aiAvailable, callStructured, providerLabel, type AiConfig } from "@/lib/ai-provider";
 import { getResumeFull } from "@/db/resume-queries";
 import {
   jobDescriptions,
   resumeBullets,
   resumeSections,
-  resumeSkills,
   tuneRuns,
   vaultBullets,
   vaultEntries,
@@ -25,12 +25,14 @@ import { parseJobDescriptionHeuristically } from "@/lib/jd-parse";
 import { getSectionDef } from "@/lib/sections";
 import { tune, type TuneOutput } from "@/lib/tuner";
 
+import { createEntry as createVaultEntry, updateEntry as updateVaultEntry } from "../vault/actions";
 import {
-  createEntry as createVaultEntry,
-  createSection as createVaultSection,
-  updateEntry as updateVaultEntry,
-} from "../vault/actions";
-import { addSection, moveSection, pullEntryFromVault, pullSkillsFromVault, toggleBulletVisible } from "./actions";
+  addSection,
+  moveSection,
+  pullEntryFromVault,
+  pullSkillsFromVault,
+  toggleBulletVisible,
+} from "./actions";
 
 /**
  * The vault section to file a newly-discovered skill under.
@@ -39,32 +41,30 @@ import { addSection, moveSection, pullEntryFromVault, pullSkillsFromVault, toggl
  * named however they like — and only creates "Skills" when there is none.
  * Inventing a section on every run would litter the sidebar.
  */
-function ensureVaultSkillSection(): number {
-  const existing = db
-    .select()
-    .from(vaultSections)
-    .orderBy(asc(vaultSections.displayOrder))
-    .all()
-    .find((s) => s.type === "skill");
+async function ensureVaultSkillSection(): Promise<number> {
+  const existing = (
+    await db.select().from(vaultSections).orderBy(asc(vaultSections.displayOrder))
+  ).find((s) => s.type === "skill");
 
   if (existing) return existing.id;
 
-  const last = db
-    .select({ o: vaultSections.displayOrder })
-    .from(vaultSections)
-    .orderBy(desc(vaultSections.displayOrder))
-    .get();
+  const last = await first(
+    db
+      .select({ o: vaultSections.displayOrder })
+      .from(vaultSections)
+      .orderBy(desc(vaultSections.displayOrder)),
+  );
 
-  return db
-    .insert(vaultSections)
-    .values({ heading: "Skills", type: "skill", displayOrder: (last?.o ?? -1) + 1 })
-    .returning({ id: vaultSections.id })
-    .get().id;
+  return (await first(
+    db
+      .insert(vaultSections)
+      .values({ heading: "Skills", type: "skill", displayOrder: (last?.o ?? -1) + 1 })
+      .returning({ id: vaultSections.id }),
+  ))!.id;
 }
 
 export type ActionResult<T = undefined> =
-  | ({ ok: true } & (T extends undefined ? object : { data: T }))
-  | { ok: false; error: string };
+  ({ ok: true } & (T extends undefined ? object : { data: T })) | { ok: false; error: string };
 
 function fail(error: string): { ok: false; error: string } {
   return { ok: false, error };
@@ -89,23 +89,24 @@ export type TuneResult = TuneOutput & {
  * anything about the Claude path fails. The AI layer improves requirement
  * extraction; it is never what makes the feature work.
  */
-export async function runTune(
-  resumeId: number,
-  jdText: string,
-): Promise<ActionResult<TuneResult>> {
-  bootstrap();
-
-  const parsedText = z.string().trim().min(40, "Paste a bit more of the job description").safeParse(jdText);
+export async function runTune(resumeId: number, jdText: string): Promise<ActionResult<TuneResult>> {
+  const parsedText = z
+    .string()
+    .trim()
+    .min(40, "Paste a bit more of the job description")
+    .safeParse(jdText);
   if (!parsedText.success) return fail(parsedText.error.issues[0]!.message);
-
-  const resume = getResumeFull(resumeId);
-  if (!resume) return fail("Resume not found");
 
   let jd: JdParsed = parseJobDescriptionHeuristically(parsedText.data);
 
-  if (aiAvailable()) {
+  // The AI call happens between two short vault scopes rather than inside one:
+  // a scope is an open transaction holding a pooled connection, and a model
+  // can take tens of seconds to answer.
+  const ai = await withVault(() => getAiConfig());
+
+  if (aiAvailable(ai)) {
     try {
-      const refined = await refineWithAi(parsedText.data, jd);
+      const refined = await refineWithAi(parsedText.data, jd, ai);
       if (refined) jd = refined;
     } catch {
       // Keep the heuristic result. An API hiccup must not cost the user their
@@ -113,115 +114,125 @@ export async function runTune(
     }
   }
 
-  const entries = db.select().from(vaultEntries).orderBy(asc(vaultEntries.displayOrder)).all();
-  const bullets = db.select().from(vaultBullets).orderBy(asc(vaultBullets.displayOrder)).all();
-  const skills = db.select().from(vaultSkills).all();
+  return withVault(async () => {
+    const resume = await getResumeFull(resumeId);
+    if (!resume) return fail("Resume not found");
 
-  const byEntry = new Map<number, typeof bullets>();
-  for (const b of bullets) {
-    const list = byEntry.get(b.entryId);
-    if (list) list.push(b);
-    else byEntry.set(b.entryId, [b]);
-  }
+    const entries = await db.select().from(vaultEntries).orderBy(asc(vaultEntries.displayOrder));
+    const bullets = await db.select().from(vaultBullets).orderBy(asc(vaultBullets.displayOrder));
+    const skills = await db.select().from(vaultSkills);
 
-  // Section headings ride along so the tuner can weight by them — vault
-  // sections are user-named now, so there's no type to look weights up by.
-  const sectionHeadings = new Map(
-    db.select().from(vaultSections).all().map((s) => [s.id, s.heading]),
-  );
+    const byEntry = new Map<number, typeof bullets>();
+    for (const b of bullets) {
+      const list = byEntry.get(b.entryId);
+      if (list) list.push(b);
+      else byEntry.set(b.entryId, [b]);
+    }
 
-  const output = tune({
-    jd,
-    resume,
-    vaultEntries: entries.map((e) => ({
-      ...e,
-      bullets: byEntry.get(e.id) ?? [],
-      sectionHeading: sectionHeadings.get(e.sectionId) ?? "",
-    })),
-    vaultSkills: skills,
-  });
+    // Section headings ride along so the tuner can weight by them — vault
+    // sections are user-named now, so there's no type to look weights up by.
+    const sectionHeadings = new Map(
+      (await db.select().from(vaultSections)).map((s) => [s.id, s.heading]),
+    );
 
-  const jdRow = db
-    .insert(jobDescriptions)
-    .values({ rawText: parsedText.data.slice(0, 20000), parsed: jd })
-    .returning({ id: jobDescriptions.id })
-    .get();
-
-  const runRow = db
-    .insert(tuneRuns)
-    .values({
-      resumeId,
-      jdId: jdRow.id,
-      recommendations: output.recommendations,
-      coverage: output.coverage,
-    })
-    .returning({ id: tuneRuns.id })
-    .get();
-
-  const { providerLabel } = await import("@/lib/ai-provider");
-
-  return {
-    ok: true,
-    data: {
-      ...output,
+    const output = tune({
       jd,
-      jdId: jdRow.id,
-      runId: runRow.id,
-      // "locally" when the deterministic parser's result is what we kept —
-      // whether that's because there's no provider or because one failed.
-      providerName: jd.source === "heuristic" ? "locally" : `with ${providerLabel()}`,
-    },
-  };
+      resume,
+      vaultEntries: entries.map((e) => ({
+        ...e,
+        bullets: byEntry.get(e.id) ?? [],
+        sectionHeading: sectionHeadings.get(e.sectionId) ?? "",
+      })),
+      vaultSkills: skills,
+    });
+
+    const jdRow = (await first(
+      db
+        .insert(jobDescriptions)
+        .values({ rawText: parsedText.data.slice(0, 20000), parsed: jd })
+        .returning({ id: jobDescriptions.id }),
+    ))!;
+
+    const runRow = (await first(
+      db
+        .insert(tuneRuns)
+        .values({
+          resumeId,
+          jdId: jdRow.id,
+          recommendations: output.recommendations,
+          coverage: output.coverage,
+        })
+        .returning({ id: tuneRuns.id }),
+    ))!;
+
+    return {
+      ok: true,
+      data: {
+        ...output,
+        jd,
+        jdId: jdRow.id,
+        runId: runRow.id,
+        // "locally" when the deterministic parser's result is what we kept —
+        // whether that's because there's no provider or because one failed.
+        providerName: jd.source === "heuristic" ? "locally" : `with ${providerLabel(ai)}`,
+      },
+    };
+  });
 }
 
 /**
  * Whichever AI provider is configured refines requirement extraction.
  * Returns null on any doubt, and the caller keeps the deterministic result.
  */
-async function refineWithAi(text: string, fallback: JdParsed): Promise<JdParsed | null> {
-  const { callStructured } = await import("@/lib/ai-provider");
-
-  const raw = await callStructured({
-    toolName: "record_jd",
-    toolDescription: "Record the structured requirements of a job description.",
-    maxTokens: 3000,
-    // Deliberately plain JSON Schema — Gemini's responseSchema accepts only a
-    // subset, and a schema that works everywhere beats three bespoke ones.
-    schema: {
-      type: "object",
-      properties: {
-        role: { type: "string" },
-        company: { type: "string" },
-        seniority: { type: "string" },
-        requirements: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              text: { type: "string" },
-              kind: { type: "string", enum: ["must_have", "nice_to_have"] },
-              category: {
-                type: "string",
-                enum: ["technical", "domain", "soft", "experience"],
+async function refineWithAi(
+  text: string,
+  fallback: JdParsed,
+  ai: AiConfig,
+): Promise<JdParsed | null> {
+  const raw = await callStructured(
+    {
+      toolName: "record_jd",
+      toolDescription: "Record the structured requirements of a job description.",
+      maxTokens: 3000,
+      // Deliberately plain JSON Schema — Gemini's responseSchema accepts only a
+      // subset, and a schema that works everywhere beats three bespoke ones.
+      schema: {
+        type: "object",
+        properties: {
+          role: { type: "string" },
+          company: { type: "string" },
+          seniority: { type: "string" },
+          requirements: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                text: { type: "string" },
+                kind: { type: "string", enum: ["must_have", "nice_to_have"] },
+                category: {
+                  type: "string",
+                  enum: ["technical", "domain", "soft", "experience"],
+                },
+                terms: { type: "array", items: { type: "string" } },
               },
-              terms: { type: "array", items: { type: "string" } },
+              required: ["text", "kind", "category", "terms"],
             },
-            required: ["text", "kind", "category", "terms"],
           },
+          keywords: { type: "array", items: { type: "string" } },
         },
-        keywords: { type: "array", items: { type: "string" } },
+        required: ["requirements", "keywords"],
       },
-      required: ["requirements", "keywords"],
+      prompt: [
+        "Extract the requirements from this job description.",
+        "Separate must-haves from nice-to-haves.",
+        "For each requirement, list lowercase keywords a resume bullet would contain to satisfy it.",
+        "Do not invent requirements that aren't stated in the text.",
+        "",
+        text,
+      ].join("\n"),
     },
-    prompt: [
-      "Extract the requirements from this job description.",
-      "Separate must-haves from nice-to-haves.",
-      "For each requirement, list lowercase keywords a resume bullet would contain to satisfy it.",
-      "Do not invent requirements that aren't stated in the text.",
-      "",
-      text,
-    ].join("\n"),
-  });
+    ai,
+  );
 
   if (!raw) return null;
 
@@ -273,13 +284,10 @@ async function refineWithAi(text: string, fallback: JdParsed): Promise<JdParsed 
 /* ------------------------------------------------------------------ */
 
 /** Find or create the resume section a vault entry of this type belongs in. */
-function sectionForType(resumeId: number, sectionType: string): number | null {
-  const existing = db
-    .select()
-    .from(resumeSections)
-    .where(eq(resumeSections.resumeId, resumeId))
-    .all()
-    .find((s) => s.sectionType === sectionType);
+async function sectionForType(resumeId: number, sectionType: string): Promise<number | null> {
+  const existing = (
+    await db.select().from(resumeSections).where(eq(resumeSections.resumeId, resumeId))
+  ).find((s) => s.sectionType === sectionType);
 
   return existing?.id ?? null;
 }
@@ -288,182 +296,168 @@ export async function applyRecommendation(
   resumeId: number,
   rec: Recommendation,
 ): Promise<ActionResult> {
-  bootstrap();
+  return withVault(async () => {
+    try {
+      switch (rec.type) {
+        case "ADD_ENTRY":
+        case "ADD_BULLET": {
+          const vaultEntryId = Number(rec.payload.vaultEntryId);
+          const vaultBulletId = Number(rec.payload.vaultBulletId);
+          const sectionType = String(rec.payload.sectionType);
 
-  try {
-    switch (rec.type) {
-      case "ADD_ENTRY":
-      case "ADD_BULLET": {
-        const vaultEntryId = Number(rec.payload.vaultEntryId);
-        const vaultBulletId = Number(rec.payload.vaultBulletId);
-        const sectionType = String(rec.payload.sectionType);
+          let sectionId = await sectionForType(resumeId, sectionType);
+          if (!sectionId) {
+            // The vault has content for a section this resume doesn't have yet.
+            const created = await addSection(resumeId, sectionType);
+            if (!created.ok) return fail(created.error);
+            sectionId = created.data;
+          }
 
-        let sectionId = sectionForType(resumeId, sectionType);
-        if (!sectionId) {
-          // The vault has content for a section this resume doesn't have yet.
-          const created = await addSection(resumeId, sectionType);
-          if (!created.ok) return fail(created.error);
-          sectionId = created.data;
-        }
+          const existingEntry = await first(
+            db.select().from(resumeSections).where(eq(resumeSections.id, sectionId)),
+          );
+          if (!existingEntry) return fail("Section not found");
 
-        const existingEntry = db
-          .select()
-          .from(resumeSections)
-          .where(eq(resumeSections.id, sectionId))
-          .get();
-        if (!existingEntry) return fail("Section not found");
+          const alreadyThere = (await db.select().from(resumeBullets)).some(
+            (b) => b.sourceBulletId === vaultBulletId,
+          );
+          if (alreadyThere) return { ok: true };
 
-        const alreadyThere = db
-          .select()
-          .from(resumeBullets)
-          .all()
-          .some((b) => b.sourceBulletId === vaultBulletId);
-        if (alreadyThere) return { ok: true };
+          // Is the parent entry already on the resume?
+          const resume = await getResumeFull(resumeId);
+          const parent = resume?.sections
+            .flatMap((s) => s.entries)
+            .find((e) => e.sourceEntryId === vaultEntryId);
 
-        // Is the parent entry already on the resume?
-        const resume = getResumeFull(resumeId);
-        const parent = resume?.sections
-          .flatMap((s) => s.entries)
-          .find((e) => e.sourceEntryId === vaultEntryId);
+          if (parent) {
+            const bullet = await first(
+              db.select().from(vaultBullets).where(eq(vaultBullets.id, vaultBulletId)),
+            );
+            if (!bullet) return fail("That bullet is no longer in your vault");
 
-        if (parent) {
-          const bullet = db
-            .select()
-            .from(vaultBullets)
-            .where(eq(vaultBullets.id, vaultBulletId))
-            .get();
-          if (!bullet) return fail("That bullet is no longer in your vault");
+            const last = await first(
+              db
+                .select({ o: resumeBullets.displayOrder })
+                .from(resumeBullets)
+                .where(eq(resumeBullets.resumeEntryId, parent.id))
+                .orderBy(desc(resumeBullets.displayOrder)),
+            );
 
-          const last = db
-            .select({ o: resumeBullets.displayOrder })
-            .from(resumeBullets)
-            .where(eq(resumeBullets.resumeEntryId, parent.id))
-            .orderBy(desc(resumeBullets.displayOrder))
-            .get();
-
-          db.insert(resumeBullets)
-            .values({
+            await db.insert(resumeBullets).values({
               resumeEntryId: parent.id,
               sourceBulletId: bullet.id,
               text: bullet.text,
               displayOrder: (last?.o ?? -1) + 1,
-            })
-            .run();
-        } else {
-          const result = await pullEntryFromVault(sectionId, vaultEntryId, [vaultBulletId]);
-          if (!result.ok) return fail(result.error);
-        }
-        break;
-      }
-
-      case "ADD_SKILL": {
-        let sectionId = sectionForType(resumeId, "skill");
-        if (!sectionId) {
-          const created = await addSection(resumeId, "skill", getSectionDef("skill").heading);
-          if (!created.ok) return fail(created.error);
-          sectionId = created.data;
+            });
+          } else {
+            const result = await pullEntryFromVault(sectionId, vaultEntryId, [vaultBulletId]);
+            if (!result.ok) return fail(result.error);
+          }
+          break;
         }
 
-        // Two shapes: a skill already in the vault's derived index, or one only
-        // evidenced in bullet text, which has to become a vault skill entry
-        // first. Creating the entry reindexes it, which is where the id comes from.
-        let skillId = Number(rec.payload.vaultSkillId);
+        case "ADD_SKILL": {
+          let sectionId = await sectionForType(resumeId, "skill");
+          if (!sectionId) {
+            const created = await addSection(resumeId, "skill", getSectionDef("skill").heading);
+            if (!created.ok) return fail(created.error);
+            sectionId = created.data;
+          }
 
-        if (!skillId && rec.payload.newSkillName) {
-          const name = String(rec.payload.newSkillName);
-          const category = String(rec.payload.newSkillCategory || "Skills");
+          // Two shapes: a skill already in the vault's derived index, or one only
+          // evidenced in bullet text, which has to become a vault skill entry
+          // first. Creating the entry reindexes it, which is where the id comes from.
+          let skillId = Number(rec.payload.vaultSkillId);
 
-          const vaultSectionId = ensureVaultSkillSection();
+          if (!skillId && rec.payload.newSkillName) {
+            const name = String(rec.payload.newSkillName);
+            const category = String(rec.payload.newSkillCategory || "Skills");
 
-          // Append to an entry with this category label if one exists, so we
-          // don't accumulate a section full of one-skill entries.
-          const existingEntry = db
-            .select()
-            .from(vaultEntries)
-            .all()
-            .find(
+            const vaultSectionId = await ensureVaultSkillSection();
+
+            // Append to an entry with this category label if one exists, so we
+            // don't accumulate a section full of one-skill entries.
+            const existingEntry = (await db.select().from(vaultEntries)).find(
               (e) =>
                 e.sectionId === vaultSectionId &&
                 e.title.trim().toLowerCase() === category.toLowerCase(),
             );
 
-          if (existingEntry) {
-            const merged = existingEntry.information
-              ? `${existingEntry.information} | ${name}`
-              : name;
-            const updated = await updateVaultEntry(existingEntry.id, {
-              title: existingEntry.title,
-              organization: existingEntry.organization,
-              subtitle: existingEntry.subtitle,
-              location: existingEntry.location,
-              startDate: existingEntry.startDate,
-              endDate: existingEntry.endDate,
-              isCurrent: existingEntry.isCurrent,
-              url: existingEntry.url,
-              information: merged,
-              level: existingEntry.level,
-            });
-            if (!updated.ok) return fail(updated.error);
-          } else {
-            const created = await createVaultEntry(vaultSectionId, {
-              title: category,
-              information: name,
-            });
-            if (!created.ok) return fail(created.error);
+            if (existingEntry) {
+              const merged = existingEntry.information
+                ? `${existingEntry.information} | ${name}`
+                : name;
+              const updated = await updateVaultEntry(existingEntry.id, {
+                title: existingEntry.title,
+                organization: existingEntry.organization,
+                subtitle: existingEntry.subtitle,
+                location: existingEntry.location,
+                startDate: existingEntry.startDate,
+                endDate: existingEntry.endDate,
+                isCurrent: existingEntry.isCurrent,
+                url: existingEntry.url,
+                information: merged,
+                level: existingEntry.level,
+              });
+              if (!updated.ok) return fail(updated.error);
+            } else {
+              const created = await createVaultEntry(vaultSectionId, {
+                title: category,
+                information: name,
+              });
+              if (!created.ok) return fail(created.error);
+            }
+
+            // Pick the freshly indexed row for this skill.
+            const indexed = (await db.select().from(vaultSkills)).find(
+              (s) => s.name.toLowerCase() === name.toLowerCase(),
+            );
+            if (!indexed) return fail("Could not index that skill");
+            skillId = indexed.id;
           }
 
-          // Pick the freshly indexed row for this skill.
-          const indexed = db
+          if (!skillId) return fail("No skill to add");
+
+          const result = await pullSkillsFromVault(sectionId, [skillId]);
+          if (!result.ok) return fail(result.error);
+          break;
+        }
+
+        case "REMOVE_BULLET": {
+          // Hides rather than deletes — the tuner's judgment is advisory, and a
+          // hidden bullet is one click from coming back.
+          const result = await toggleBulletVisible(Number(rec.payload.resumeBulletId));
+          if (!result.ok) return fail(result.error);
+          break;
+        }
+
+        case "REORDER": {
+          const sectionId = Number(rec.payload.sectionId);
+          const sections = await db
             .select()
-            .from(vaultSkills)
-            .all()
-            .find((s) => s.name.toLowerCase() === name.toLowerCase());
-          if (!indexed) return fail("Could not index that skill");
-          skillId = indexed.id;
+            .from(resumeSections)
+            .where(eq(resumeSections.resumeId, resumeId))
+            .orderBy(asc(resumeSections.displayOrder));
+
+          const index = sections.findIndex((s) => s.id === sectionId);
+          for (let i = index; i > 0; i--) {
+            const result = await moveSection(sectionId, "up");
+            if (!result.ok) break;
+          }
+          break;
         }
 
-        if (!skillId) return fail("No skill to add");
-
-        const result = await pullSkillsFromVault(sectionId, [skillId]);
-        if (!result.ok) return fail(result.error);
-        break;
+        case "EDIT_BULLET":
+          return fail("Bullet rewriting needs an API key — add one in Settings");
       }
 
-      case "REMOVE_BULLET": {
-        // Hides rather than deletes — the tuner's judgment is advisory, and a
-        // hidden bullet is one click from coming back.
-        const result = await toggleBulletVisible(Number(rec.payload.resumeBulletId));
-        if (!result.ok) return fail(result.error);
-        break;
-      }
-
-      case "REORDER": {
-        const sectionId = Number(rec.payload.sectionId);
-        const sections = db
-          .select()
-          .from(resumeSections)
-          .where(eq(resumeSections.resumeId, resumeId))
-          .orderBy(asc(resumeSections.displayOrder))
-          .all();
-
-        const index = sections.findIndex((s) => s.id === sectionId);
-        for (let i = index; i > 0; i--) {
-          const result = await moveSection(sectionId, "up");
-          if (!result.ok) break;
-        }
-        break;
-      }
-
-      case "EDIT_BULLET":
-        return fail("Bullet rewriting needs an API key — add one in Settings");
+      revalidatePath(`/resume/${resumeId}`);
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return fail(`Could not apply that change: ${message}`);
     }
-
-    revalidatePath(`/resume/${resumeId}`);
-    return { ok: true };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return fail(`Could not apply that change: ${message}`);
-  }
+  });
 }
 
 /** Persist applied/dismissed state so decisions survive a reload. */
@@ -472,23 +466,25 @@ export async function setRecommendationStatus(
   recId: string,
   status: "pending" | "applied" | "dismissed",
 ): Promise<ActionResult> {
-  bootstrap();
+  return withVault(async () => {
+    const run = await first(db.select().from(tuneRuns).where(eq(tuneRuns.id, runId)));
+    if (!run) return fail("Tune run not found");
 
-  const run = db.select().from(tuneRuns).where(eq(tuneRuns.id, runId)).get();
-  if (!run) return fail("Tune run not found");
+    const next = run.recommendations.map((r) => (r.id === recId ? { ...r, status } : r));
+    await db.update(tuneRuns).set({ recommendations: next }).where(eq(tuneRuns.id, runId));
 
-  const next = run.recommendations.map((r) => (r.id === recId ? { ...r, status } : r));
-  db.update(tuneRuns).set({ recommendations: next }).where(eq(tuneRuns.id, runId)).run();
-
-  return { ok: true };
+    return { ok: true };
+  });
 }
 
 export async function latestTuneRun(resumeId: number) {
-  bootstrap();
-  return db
-    .select()
-    .from(tuneRuns)
-    .where(eq(tuneRuns.resumeId, resumeId))
-    .orderBy(desc(tuneRuns.createdAt))
-    .get();
+  return withVault(async () => {
+    return await first(
+      db
+        .select()
+        .from(tuneRuns)
+        .where(eq(tuneRuns.resumeId, resumeId))
+        .orderBy(desc(tuneRuns.createdAt)),
+    );
+  });
 }

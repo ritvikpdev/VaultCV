@@ -2,9 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
-import { hasApiKey } from "@/db/bootstrap";
+import { hasApiKey } from "@/db/ai-config";
 import { allSections, allSkills } from "@/db/queries";
-import { getResumeFull, vaultOptionsForSection } from "@/db/resume-queries";
+import { getResumeFull, vaultOptionsForResume } from "@/db/resume-queries";
+import { withVault } from "@/db/session";
 
 import { type SectionVaultData, type VaultSkillContext } from "./content-tab";
 import { ResumeEditor, type Tab } from "./editor";
@@ -25,22 +26,31 @@ export default async function ResumePage({
   const resumeId = Number(id);
   if (!Number.isInteger(resumeId)) notFound();
 
-  const resume = getResumeFull(resumeId);
-  if (!resume) notFound();
+  const loaded = await withVault(async () => {
+    const resume = await getResumeFull(resumeId);
+    if (!resume) return null;
+    const [opts, sections, skills, keyPresent] = await Promise.all([
+      vaultOptionsForResume(resume.sections.map((s) => s.id)),
+      allSections(),
+      allSkills(),
+      hasApiKey(),
+    ]);
+    return { resume, opts, sections, skills, keyPresent };
+  });
+  if (!loaded) notFound();
+  const { resume, opts, sections, skills, keyPresent } = loaded;
 
-  const activeTab: Tab =
-    tab === "customize" || tab === "tune" ? (tab as Tab) : "content";
+  const activeTab: Tab = tab === "customize" || tab === "tune" ? (tab as Tab) : "content";
 
   // Vault options per section, resolved on the server so the picker opens
   // instantly instead of fetching on click.
   const vaultData: SectionVaultData = {};
   for (const section of resume.sections) {
-    const opts = vaultOptionsForSection(resumeId, section.id);
     vaultData[section.id] = {
       sections: opts.sections,
       entries: opts.entries,
       skills: opts.skills,
-      usedEntryIds: [...opts.usedEntryIds],
+      usedEntryIds: [...(opts.usedEntryIds.get(section.id) ?? [])],
       usedSkillIds: section.skills.map((s) => s.id),
     };
   }
@@ -49,10 +59,10 @@ export default async function ResumePage({
   // already knows — so the save step can offer the right sections and skip
   // skills you demonstrably have.
   const vaultSkills: VaultSkillContext = {
-    targets: allSections()
+    targets: sections
       .filter((s) => s.type === "skill")
       .map((s) => ({ id: s.id, heading: s.heading })),
-    known: allSkills().map((s) => s.name),
+    known: skills.map((s) => s.name),
   };
 
   return (
@@ -74,7 +84,7 @@ export default async function ResumePage({
         vaultData={vaultData}
         vaultSkills={vaultSkills}
         activeTab={activeTab}
-        hasApiKey={hasApiKey()}
+        hasApiKey={keyPresent}
       />
     </div>
   );

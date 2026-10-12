@@ -20,7 +20,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import Database from "better-sqlite3";
+import { DatabaseSync as Database } from "node:sqlite";
 
 const args = process.argv.slice(2);
 const force = args.includes("--force");
@@ -54,7 +54,7 @@ fs.mkdirSync(path.dirname(target), { recursive: true });
 // the overwrite has been authorised above.
 if (fs.existsSync(target)) fs.rmSync(target);
 
-const db = new Database(dbPath, { readonly: false });
+const db = new Database(dbPath, {});
 
 const tables = db
   .prepare(
@@ -66,7 +66,7 @@ const tables = db
 db.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
 db.close();
 
-const check = new Database(target, { readonly: true });
+const check = new Database(target, { readOnly: true });
 let total = 0;
 const rows = tables.map(({ name }) => {
   const n = check.prepare(`select count(*) c from "${name}"`).get().c;

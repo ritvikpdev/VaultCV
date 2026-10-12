@@ -2,20 +2,25 @@ import Link from "next/link";
 import { count } from "drizzle-orm";
 import { Check, Circle } from "lucide-react";
 
-import { db } from "@/db/client";
-import { getProfile, hasApiKey } from "@/db/bootstrap";
+import { hasApiKey } from "@/db/ai-config";
+import { db, first } from "@/db/client";
+import { getProfile } from "@/db/bootstrap";
 import { listResumes } from "@/db/resume-queries";
+import { withVault } from "@/db/session";
 import { vaultBullets, vaultEntries } from "@/db/schema";
 
 import { ResumeList } from "./resume-list";
 
 export const dynamic = "force-dynamic";
 
-export default function HomePage() {
-  const profile = getProfile();
-  const entryCount = db.select({ n: count() }).from(vaultEntries).get()?.n ?? 0;
-  const bulletCount = db.select({ n: count() }).from(vaultBullets).get()?.n ?? 0;
-  const resumes = listResumes();
+export default async function HomePage() {
+  const { profile, entryCount, bulletCount, resumes, keyPresent } = await withVault(async () => ({
+    profile: await getProfile(),
+    entryCount: (await first(db.select({ n: count() }).from(vaultEntries)))?.n ?? 0,
+    bulletCount: (await first(db.select({ n: count() }).from(vaultBullets)))?.n ?? 0,
+    resumes: await listResumes(),
+    keyPresent: await hasApiKey(),
+  }));
 
   const checks = [
     {
@@ -37,7 +42,7 @@ export default function HomePage() {
       action: "Vault",
     },
     {
-      done: hasApiKey(),
+      done: keyPresent,
       label: "API key set (optional)",
       href: "/settings",
       action: "Settings",

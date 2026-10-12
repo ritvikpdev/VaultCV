@@ -2,15 +2,18 @@ import "server-only";
 
 import { eq } from "drizzle-orm";
 
-import { db } from "./client";
+import { currentUserId, db, first } from "./client";
 import { profile, settings } from "./schema";
 
 /**
- * First-run setup. Idempotent — safe to call on every request.
+ * First-sign-in setup for the current user. Idempotent — safe on every request.
  *
  * Deliberately does NOT create tables. Schema comes from `npm run db:push`, so
  * there is exactly one source of truth for structure (schema.ts) and no chance
  * of a hand-written CREATE TABLE drifting from the Drizzle definition.
+ *
+ * Runs inside the user's scope, so the rows it inserts are stamped with their
+ * id by the `user_id` column default.
  */
 
 export const SETTING_KEYS = {
@@ -34,6 +37,12 @@ export const SETTING_KEYS = {
    * before it could be dragged — so existing vaults need no migration.
    */
   ungroupedOrder: "vault_ungrouped_order",
+  /** "anthropic" | "gemini" | "" — which provider the user's own key is for. */
+  aiProvider: "ai_provider",
+  /** The user's API key, encrypted with VAULTCV_SECRET (see secret-box.ts). */
+  aiKey: "ai_key",
+  /** Last four characters of the key, so Settings can show which one is saved. */
+  aiKeyHint: "ai_key_hint",
 } as const;
 
 const DEFAULT_SETTINGS: Record<string, string> = {
@@ -42,55 +51,54 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   [SETTING_KEYS.ungroupedOrder]: "-1",
 };
 
-let didBootstrap = false;
+/**
+ * Users already set up by this server process. Per user rather than one flag,
+ * because one process now serves everybody. Losing it (a cold start) costs two
+ * cheap reads, never a duplicate row — the inserts below are guarded.
+ */
+const bootstrapped = new Set<string>();
 
-export function bootstrap() {
-  if (didBootstrap) return;
+export async function bootstrap() {
+  const userId = currentUserId();
+  if (!userId || bootstrapped.has(userId)) return;
 
-  // Singleton profile row.
-  const existingProfile = db.select().from(profile).limit(1).all();
-  if (existingProfile.length === 0) {
-    db.insert(profile).values({ fullName: "", email: "" }).run();
-  }
+  // `onConflictDoNothing` on the unique user index: two first requests racing
+  // in parallel must not both create a profile.
+  await db
+    .insert(profile)
+    .values({ fullName: "", email: "" })
+    .onConflictDoNothing({ target: profile.userId });
 
   // Default settings, without clobbering anything already set.
-  const existing = new Set(db.select().from(settings).all().map((s) => s.key));
-  for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
-    if (!existing.has(key)) {
-      db.insert(settings).values({ key, value }).run();
-    }
+  const existing = new Set((await db.select().from(settings)).map((s) => s.key));
+  const missing = Object.entries(DEFAULT_SETTINGS).filter(([key]) => !existing.has(key));
+  if (missing.length > 0) {
+    await db
+      .insert(settings)
+      .values(missing.map(([key, value]) => ({ key, value })))
+      .onConflictDoNothing();
   }
 
-  didBootstrap = true;
+  bootstrapped.add(userId);
 }
 
-export function getSetting(key: string): string | null {
-  bootstrap();
-  const row = db.select().from(settings).where(eq(settings.key, key)).get();
+export async function getSetting(key: string): Promise<string | null> {
+  const row = await first(db.select().from(settings).where(eq(settings.key, key)));
   return row?.value ?? null;
 }
 
-export function setSetting(key: string, value: string) {
-  bootstrap();
-  db.insert(settings)
+export async function setSetting(key: string, value: string) {
+  await db
+    .insert(settings)
     .values({ key, value })
-    .onConflictDoUpdate({ target: settings.key, set: { value } })
-    .run();
+    .onConflictDoUpdate({ target: [settings.userId, settings.key], set: { value } });
 }
 
-export function getProfile() {
-  bootstrap();
-  return db.select().from(profile).limit(1).get()!;
+export async function deleteSetting(key: string) {
+  await db.delete(settings).where(eq(settings.key, key));
 }
 
-/**
- * True when any AI provider is configured — Anthropic, Gemini or a local
- * Ollama. Features check this to explain themselves, never to refuse to run.
- */
-export function hasApiKey(): boolean {
-  return Boolean(
-    process.env.ANTHROPIC_API_KEY?.trim() ||
-      process.env.GEMINI_API_KEY?.trim() ||
-      process.env.OLLAMA_BASE_URL?.trim(),
-  );
+export async function getProfile() {
+  await bootstrap();
+  return (await first(db.select().from(profile)))!;
 }

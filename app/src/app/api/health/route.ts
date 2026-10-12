@@ -1,20 +1,22 @@
 import { NextResponse } from "next/server";
 import { count } from "drizzle-orm";
-import type { SQLiteTable } from "drizzle-orm/sqlite-core";
+import type { PgTable } from "drizzle-orm/pg-core";
 
-import { db } from "@/db/client";
-import { bootstrap, getProfile, getSetting, hasApiKey, SETTING_KEYS } from "@/db/bootstrap";
-import { activeProvider, providerLabel } from "@/lib/ai-provider";
-import { vaultBullets, vaultEntries, resumes } from "@/db/schema";
+import { getAiConfig } from "@/db/ai-config";
+import { db, first } from "@/db/client";
+import { getProfile, getSetting, SETTING_KEYS } from "@/db/bootstrap";
+import { getSessionUser, withVault } from "@/db/session";
+import { providerLabel } from "@/lib/ai-provider";
+import { resumes, vaultBullets, vaultEntries } from "@/db/schema";
 
-function rowCount(table: SQLiteTable): number {
-  return db.select({ n: count() }).from(table).get()?.n ?? 0;
+async function rowCount(table: PgTable): Promise<number> {
+  return (await first(db.select({ n: count() }).from(table)))?.n ?? 0;
 }
 
 export const dynamic = "force-dynamic";
 
 /**
- * Readiness, not liveness.
+ * Readiness, not liveness — for the signed-in user.
  *
  * Note what this does NOT do: gate the app. v1 put an Ollama health check in
  * front of the core features, so a stopped model server made the app look
@@ -22,42 +24,45 @@ export const dynamic = "force-dynamic";
  * is unavailable and why, and nothing else.
  */
 export async function GET() {
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ ok: false, error: "Not signed in" }, { status: 401 });
+
   try {
-    bootstrap();
-
-    const profile = getProfile();
-
-    return NextResponse.json({
-      ok: true,
-      database: {
-        connected: true,
-        path: process.env.DATABASE_PATH ?? "./data/vaultcv.db",
-      },
-      profile: {
-        complete: Boolean(profile.fullName.trim() && profile.email.trim()),
-        name: profile.fullName,
-      },
-      vault: {
-        entries: rowCount(vaultEntries),
-        bullets: rowCount(vaultBullets),
-      },
-      resumes: rowCount(resumes),
-      ai: {
-        // No provider is a normal state, not an error. Matching, editing,
-        // styling and export all work without one.
-        keyPresent: hasApiKey(),
-        // Reports whichever provider is actually active. Hardcoding the
-        // Anthropic model here meant a status endpoint that lied about the
-        // system's state, which is the one thing it exists not to do.
-        provider: activeProvider(),
-        model: providerLabel(),
-      },
-      vaultLinkMode: getSetting(SETTING_KEYS.vaultLinkMode) ?? "snapshot",
-    });
+    return NextResponse.json(
+      await withVault(async () => {
+        const [profile, ai, entries, bullets, resumeCount, linkMode] = await Promise.all([
+          getProfile(),
+          getAiConfig(),
+          rowCount(vaultEntries),
+          rowCount(vaultBullets),
+          rowCount(resumes),
+          getSetting(SETTING_KEYS.vaultLinkMode),
+        ]);
+        return {
+          ok: true,
+          database: { connected: true },
+          user: { email: user.email },
+          profile: {
+            complete: Boolean(profile.fullName.trim() && profile.email.trim()),
+            name: profile.fullName,
+          },
+          vault: { entries, bullets },
+          resumes: resumeCount,
+          ai: {
+            // No provider is a normal state, not an error. Matching, editing,
+            // styling and export all work without one.
+            keyPresent: ai.provider !== "none",
+            provider: ai.provider,
+            model: providerLabel(ai),
+          },
+          vaultLinkMode: linkMode ?? "snapshot",
+        };
+      }),
+    );
   } catch (error) {
-    // Almost always "you haven't run npm run db:push yet". Say so plainly.
+    // Almost always "tables don't exist yet" or an unreachable database.
     const message = error instanceof Error ? error.message : String(error);
-    const noTables = /no such table/i.test(message);
+    const noTables = /relation .* does not exist/i.test(message);
 
     return NextResponse.json(
       {

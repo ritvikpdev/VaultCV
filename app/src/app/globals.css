@@ -44,7 +44,7 @@
  * Resume document surface.
  *
  * Every value here is a CSS variable written from the resume_styles row. The
- * on-screen preview and the Puppeteer print target mount the SAME component, so
+ * on-screen preview and the print view (/print/[id]) mount the SAME component, so
  * the exported PDF cannot drift from what you see. Sizes are in points because
  * that is what the customize sliders speak.
  */
@@ -136,7 +136,7 @@
 /*
  * Pagination atoms.
  *
- * The preview paginates in JavaScript; Puppeteer's export is paginated by
+ * The preview paginates in JavaScript; the printed export is paginated by
  * Chrome. These rules are what make the two agree — both treat an entry as
  * unbreakable and keep a section heading with what follows it. Without them the
  * PDF would break mid-entry while the preview didn't, which is precisely the
@@ -165,7 +165,7 @@
     display: none !important;
   }
   .resume-doc {
-    /* Puppeteer supplies the page box; the doc must not add its own. */
+    /* The print view's @page rule supplies the page box; the doc must not add its own. */
     box-shadow: none;
   }
 }

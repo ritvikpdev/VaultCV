@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FileText, Settings, Vault } from "lucide-react";
+import { FileText, LogOut, Settings, Shield, Vault } from "lucide-react";
+
+import { signOut } from "@/app/auth/actions";
 
 import { cn } from "@/lib/utils";
 
@@ -12,8 +14,17 @@ const LINKS = [
   { href: "/settings", label: "Settings", icon: Settings, exact: false },
 ];
 
-export function Nav() {
+/**
+ * App chrome. Signed out, it's just the wordmark — the login page needs no
+ * links to places it can't reach.
+ */
+export function Nav({ user }: { user: { email: string; isAdmin: boolean } | null }) {
   const pathname = usePathname();
+  const links = user
+    ? user.isAdmin
+      ? [...LINKS, { href: "/admin", label: "Admin", icon: Shield, exact: false }]
+      : LINKS
+    : [];
 
   return (
     <header className="no-print sticky top-0 z-20 border-b border-line bg-surface/80 backdrop-blur">
@@ -22,7 +33,7 @@ export function Nav() {
           vault<span className="text-accent">CV</span>
         </Link>
 
-        {LINKS.map(({ href, label, icon: Icon, exact }) => {
+        {links.map(({ href, label, icon: Icon, exact }) => {
           const active = exact ? pathname === href : pathname.startsWith(href);
           return (
             <Link
@@ -40,6 +51,19 @@ export function Nav() {
             </Link>
           );
         })}
+
+        {user && (
+          <form action={signOut} className="ml-auto flex items-center gap-3">
+            <span className="hidden text-xs text-muted sm:inline">{user.email}</span>
+            <button
+              className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-muted transition-colors hover:bg-canvas hover:text-ink"
+              title="Sign out"
+            >
+              <LogOut size={15} />
+              <span className="hidden sm:inline">Sign out</span>
+            </button>
+          </form>
+        )}
       </nav>
     </header>
   );

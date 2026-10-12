@@ -3,7 +3,6 @@
 import { useState, useTransition } from "react";
 import { AlertTriangle, Check, FileText, Loader2, Sparkles, Upload } from "lucide-react";
 
-import type { Profile } from "@/db/schema";
 import { cn } from "@/lib/utils";
 
 import {
@@ -47,7 +46,7 @@ function toReviewEntries(annotated: AnnotatedImport): ReviewEntry[] {
  * it, and where an entry matches by title and employer only its new bullets are
  * added. Everything is visible and unchecking anything keeps it out.
  */
-export function ImportWizard({ currentProfile }: { currentProfile: Profile }) {
+export function ImportWizard() {
   const [mode, setMode] = useState<"text" | "pdf">("text");
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);

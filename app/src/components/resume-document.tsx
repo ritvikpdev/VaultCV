@@ -10,7 +10,7 @@ import { buildBlocks, pageWidthIn, type ResumeBlock } from "@/lib/resume-blocks"
  * THE resume renderer. There is exactly one.
  *
  * `/resume/[id]` mounts it (paginated) for the live preview and `/print/[id]`
- * mounts it (continuous) for Puppeteer. A second renderer for export is the
+ * mounts it (continuous) for the browser to print. A second renderer for export is the
  * single change most likely to make the PDF disagree with what you saw, so
  * there isn't one — the two callers differ only in how blocks are grouped, not
  * in how any block is drawn.
@@ -164,7 +164,7 @@ function EntryBlock({
 }
 
 /**
- * Continuous render — every block in one flow. This is what Puppeteer prints;
+ * Continuous render — every block in one flow. This is what gets printed;
  * Chrome decides the breaks, guided by `break-inside: avoid` on `.r-entry`.
  */
 export function ResumeDocument({

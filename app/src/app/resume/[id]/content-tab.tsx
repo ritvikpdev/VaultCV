@@ -357,11 +357,9 @@ export type VaultSkillContext = {
  */
 function SkillCategories({
   section,
-  vaultSkills,
   onEdit,
 }: {
   section: ResolvedSection;
-  vaultSkills: VaultSkillContext;
   onEdit: (category: string, skills: string) => void;
 }) {
   const [, startTransition] = useTransition();
@@ -571,7 +569,6 @@ function SectionCard({
         ) : section.layout === "skill" ? (
           <SkillCategories
             section={section}
-            vaultSkills={vaultSkills}
             onEdit={(category, skills) => setEditingCategory({ category, skills })}
           />
         ) : (

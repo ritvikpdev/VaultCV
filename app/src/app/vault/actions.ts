@@ -4,22 +4,15 @@ import { revalidatePath } from "next/cache";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 
-import { db } from "@/db/client";
-import { bootstrap, setSetting, SETTING_KEYS } from "@/db/bootstrap";
-import {
-  vaultBullets,
-  vaultEntries,
-  vaultGroups,
-  vaultSections,
-  vaultSkills,
-} from "@/db/schema";
+import { db, first } from "@/db/client";
+import { withVault } from "@/db/session";
+import { setSetting, SETTING_KEYS } from "@/db/bootstrap";
+import { vaultBullets, vaultEntries, vaultGroups, vaultSections, vaultSkills } from "@/db/schema";
 import { bulletStrength } from "@/lib/bullet-strength";
 import { extractSkills } from "@/lib/skill-index";
 
-
 export type ActionResult<T = undefined> =
-  | ({ ok: true } & (T extends undefined ? object : { data: T }))
-  | { ok: false; error: string };
+  ({ ok: true } & (T extends undefined ? object : { data: T })) | { ok: false; error: string };
 
 function fail(error: string): { ok: false; error: string } {
   return { ok: false, error };
@@ -39,52 +32,58 @@ function refresh() {
 /* ------------------------------------------------------------------ */
 
 export async function createGroup(name: string): Promise<ActionResult<number>> {
-  bootstrap();
-  const parsed = z.string().trim().min(1, "Group needs a name").max(60).safeParse(name);
-  if (!parsed.success) return fail(parsed.error.issues[0]!.message);
+  return withVault(async () => {
+    const parsed = z.string().trim().min(1, "Group needs a name").max(60).safeParse(name);
+    if (!parsed.success) return fail(parsed.error.issues[0]!.message);
 
-  const last = db
-    .select({ o: vaultGroups.displayOrder })
-    .from(vaultGroups)
-    .orderBy(desc(vaultGroups.displayOrder))
-    .get();
+    const last = await first(
+      db
+        .select({ o: vaultGroups.displayOrder })
+        .from(vaultGroups)
+        .orderBy(desc(vaultGroups.displayOrder)),
+    );
 
-  const row = db
-    .insert(vaultGroups)
-    .values({ name: parsed.data, displayOrder: (last?.o ?? -1) + 1 })
-    .returning({ id: vaultGroups.id })
-    .get();
+    const row = (await first(
+      db
+        .insert(vaultGroups)
+        .values({ name: parsed.data, displayOrder: (last?.o ?? -1) + 1 })
+        .returning({ id: vaultGroups.id }),
+    ))!;
 
-  refresh();
-  return { ok: true, data: row.id };
+    refresh();
+    return { ok: true, data: row.id };
+  });
 }
 
 export async function renameGroup(id: number, name: string): Promise<ActionResult> {
-  bootstrap();
-  const parsed = z.string().trim().min(1).max(60).safeParse(name);
-  if (!parsed.success) return fail("Group needs a name");
+  return withVault(async () => {
+    const parsed = z.string().trim().min(1).max(60).safeParse(name);
+    if (!parsed.success) return fail("Group needs a name");
 
-  db.update(vaultGroups).set({ name: parsed.data }).where(eq(vaultGroups.id, id)).run();
-  refresh();
-  return { ok: true };
+    await db.update(vaultGroups).set({ name: parsed.data }).where(eq(vaultGroups.id, id));
+    refresh();
+    return { ok: true };
+  });
 }
 
 /** Deleting a group never deletes its sections — they just become ungrouped. */
 export async function deleteGroup(id: number): Promise<ActionResult> {
-  bootstrap();
-  db.delete(vaultGroups).where(eq(vaultGroups.id, id)).run();
-  refresh();
-  return { ok: true };
+  return withVault(async () => {
+    await db.delete(vaultGroups).where(eq(vaultGroups.id, id));
+    refresh();
+    return { ok: true };
+  });
 }
 
 export async function setSectionGroup(
   sectionId: number,
   groupId: number | null,
 ): Promise<ActionResult> {
-  bootstrap();
-  db.update(vaultSections).set({ groupId }).where(eq(vaultSections.id, sectionId)).run();
-  refresh();
-  return { ok: true };
+  return withVault(async () => {
+    await db.update(vaultSections).set({ groupId }).where(eq(vaultSections.id, sectionId));
+    refresh();
+    return { ok: true };
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -104,64 +103,67 @@ export async function createSection(input: {
   icon?: string;
   groupId?: number | null;
 }): Promise<ActionResult<number>> {
-  bootstrap();
+  return withVault(async () => {
+    const parsed = sectionSchema.safeParse({
+      heading: input.heading,
+      type: input.type,
+      icon: input.icon ?? "",
+      groupId: input.groupId ?? null,
+    });
+    if (!parsed.success) return fail(parsed.error.issues[0]!.message);
 
-  const parsed = sectionSchema.safeParse({
-    heading: input.heading,
-    type: input.type,
-    icon: input.icon ?? "",
-    groupId: input.groupId ?? null,
+    const last = await first(
+      db
+        .select({ o: vaultSections.displayOrder })
+        .from(vaultSections)
+        .orderBy(desc(vaultSections.displayOrder)),
+    );
+
+    const row = (await first(
+      db
+        .insert(vaultSections)
+        .values({ ...parsed.data, displayOrder: (last?.o ?? -1) + 1 })
+        .returning({ id: vaultSections.id }),
+    ))!;
+
+    refresh();
+    return { ok: true, data: row.id };
   });
-  if (!parsed.success) return fail(parsed.error.issues[0]!.message);
-
-  const last = db
-    .select({ o: vaultSections.displayOrder })
-    .from(vaultSections)
-    .orderBy(desc(vaultSections.displayOrder))
-    .get();
-
-  const row = db
-    .insert(vaultSections)
-    .values({ ...parsed.data, displayOrder: (last?.o ?? -1) + 1 })
-    .returning({ id: vaultSections.id })
-    .get();
-
-  refresh();
-  return { ok: true, data: row.id };
 }
 
 export async function updateSection(
   id: number,
   input: { heading: string; icon?: string; groupId?: number | null },
 ): Promise<ActionResult> {
-  bootstrap();
+  return withVault(async () => {
+    const parsed = z
+      .object({
+        heading: z.string().trim().min(1, "Section needs a heading").max(60),
+        icon: z.string().trim().max(40).default(""),
+        groupId: z.number().int().nullable().default(null),
+      })
+      .safeParse({
+        heading: input.heading,
+        icon: input.icon ?? "",
+        groupId: input.groupId ?? null,
+      });
+    if (!parsed.success) return fail(parsed.error.issues[0]!.message);
 
-  const parsed = z
-    .object({
-      heading: z.string().trim().min(1, "Section needs a heading").max(60),
-      icon: z.string().trim().max(40).default(""),
-      groupId: z.number().int().nullable().default(null),
-    })
-    .safeParse({
-      heading: input.heading,
-      icon: input.icon ?? "",
-      groupId: input.groupId ?? null,
-    });
-  if (!parsed.success) return fail(parsed.error.issues[0]!.message);
-
-  // `type` is deliberately not editable: switching a section between normal and
-  // skill would leave every existing entry with the wrong shape.
-  db.update(vaultSections).set(parsed.data).where(eq(vaultSections.id, id)).run();
-  refresh();
-  return { ok: true };
+    // `type` is deliberately not editable: switching a section between normal and
+    // skill would leave every existing entry with the wrong shape.
+    await db.update(vaultSections).set(parsed.data).where(eq(vaultSections.id, id));
+    refresh();
+    return { ok: true };
+  });
 }
 
 export async function deleteSection(id: number): Promise<ActionResult> {
-  bootstrap();
-  // Entries cascade, and their bullets and skill-index rows cascade in turn.
-  db.delete(vaultSections).where(eq(vaultSections.id, id)).run();
-  refresh();
-  return { ok: true };
+  return withVault(async () => {
+    // Entries cascade, and their bullets and skill-index rows cascade in turn.
+    await db.delete(vaultSections).where(eq(vaultSections.id, id));
+    refresh();
+    return { ok: true };
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -197,36 +199,36 @@ const idList = z.array(z.number().int().positive()).max(500);
 export async function reorderSections(
   blocks: Array<{ groupId: number | null; sectionIds: number[] }>,
 ): Promise<ActionResult> {
-  bootstrap();
+  return withVault(async () => {
+    const parsed = z
+      .array(z.object({ groupId: z.number().int().positive().nullable(), sectionIds: idList }))
+      .max(100)
+      .safeParse(blocks);
+    if (!parsed.success) return fail("Could not read the new section order");
 
-  const parsed = z
-    .array(z.object({ groupId: z.number().int().positive().nullable(), sectionIds: idList }))
-    .max(100)
-    .safeParse(blocks);
-  if (!parsed.success) return fail("Could not read the new section order");
+    const known = new Set(
+      (await db.select({ id: vaultSections.id }).from(vaultSections)).map((r) => r.id),
+    );
 
-  const known = new Set(
-    db.select({ id: vaultSections.id }).from(vaultSections).all().map((r) => r.id),
-  );
-
-  db.transaction((tx) => {
-    let position = 0;
-    for (const block of parsed.data) {
-      for (const id of block.sectionIds) {
-        // Silently skipping unknown ids matters: a section deleted in another
-        // tab would otherwise resurrect itself as a phantom update.
-        if (!known.has(id)) continue;
-        tx.update(vaultSections)
-          .set({ groupId: block.groupId, displayOrder: position })
-          .where(eq(vaultSections.id, id))
-          .run();
-        position += 1;
+    await db.transaction(async (tx) => {
+      let position = 0;
+      for (const block of parsed.data) {
+        for (const id of block.sectionIds) {
+          // Silently skipping unknown ids matters: a section deleted in another
+          // tab would otherwise resurrect itself as a phantom update.
+          if (!known.has(id)) continue;
+          await tx
+            .update(vaultSections)
+            .set({ groupId: block.groupId, displayOrder: position })
+            .where(eq(vaultSections.id, id));
+          position += 1;
+        }
       }
-    }
-  });
+    });
 
-  refresh();
-  return { ok: true };
+    refresh();
+    return { ok: true };
+  });
 }
 
 /**
@@ -236,29 +238,24 @@ export async function reorderSections(
  * to the setting. Because both are read back through `orderedBlocks`, the gaps
  * left in the groups' numbering by the ungrouped slot are harmless.
  */
-export async function reorderBlocks(
-  blocks: Array<number | null>,
-): Promise<ActionResult> {
-  bootstrap();
+export async function reorderBlocks(blocks: Array<number | null>): Promise<ActionResult> {
+  return withVault(async () => {
+    const parsed = z.array(z.number().int().positive().nullable()).max(100).safeParse(blocks);
+    if (!parsed.success) return fail("Could not read the new group order");
 
-  const parsed = z
-    .array(z.number().int().positive().nullable())
-    .max(100)
-    .safeParse(blocks);
-  if (!parsed.success) return fail("Could not read the new group order");
-
-  db.transaction((tx) => {
-    parsed.data.forEach((key, i) => {
-      if (key === null) return;
-      tx.update(vaultGroups).set({ displayOrder: i }).where(eq(vaultGroups.id, key)).run();
+    await db.transaction(async (tx) => {
+      for (const [i, key] of parsed.data.entries()) {
+        if (key === null) continue;
+        await tx.update(vaultGroups).set({ displayOrder: i }).where(eq(vaultGroups.id, key));
+      }
     });
+
+    const ungroupedAt = parsed.data.indexOf(null);
+    await setSetting(SETTING_KEYS.ungroupedOrder, String(ungroupedAt === -1 ? -1 : ungroupedAt));
+
+    refresh();
+    return { ok: true };
   });
-
-  const ungroupedAt = parsed.data.indexOf(null);
-  setSetting(SETTING_KEYS.ungroupedOrder, String(ungroupedAt === -1 ? -1 : ungroupedAt));
-
-  refresh();
-  return { ok: true };
 }
 
 /* ------------------------------------------------------------------ */
@@ -301,27 +298,24 @@ export type EntryInput = z.input<typeof entrySchema>;
  * A row whose name survives keeps its id; only genuinely new names are
  * inserted and genuinely removed ones deleted.
  */
-function reindexSkills(entryId: number) {
-  const entry = db.select().from(vaultEntries).where(eq(vaultEntries.id, entryId)).get();
+async function reindexSkills(entryId: number) {
+  const entry = await first(db.select().from(vaultEntries).where(eq(vaultEntries.id, entryId)));
   if (!entry) {
-    db.delete(vaultSkills).where(eq(vaultSkills.sourceEntryId, entryId)).run();
+    await db.delete(vaultSkills).where(eq(vaultSkills.sourceEntryId, entryId));
     return;
   }
 
-  const section = db
-    .select()
-    .from(vaultSections)
-    .where(eq(vaultSections.id, entry.sectionId))
-    .get();
+  const section = await first(
+    db.select().from(vaultSections).where(eq(vaultSections.id, entry.sectionId)),
+  );
 
-  const existing = db
+  const existing = await db
     .select()
     .from(vaultSkills)
-    .where(eq(vaultSkills.sourceEntryId, entryId))
-    .all();
+    .where(eq(vaultSkills.sourceEntryId, entryId));
 
   if (section?.type !== "skill") {
-    db.delete(vaultSkills).where(eq(vaultSkills.sourceEntryId, entryId)).run();
+    await db.delete(vaultSkills).where(eq(vaultSkills.sourceEntryId, entryId));
     return;
   }
 
@@ -339,36 +333,40 @@ function reindexSkills(entryId: number) {
 
   const claimed = new Set<number>();
 
-  db.transaction((tx) => {
-    extracted.forEach((skill, i) => {
+  await db.transaction(async (tx) => {
+    for (const [i, skill] of extracted.entries()) {
       const key = skill.name.trim().toLowerCase();
       const candidates = available.get(key);
       const id = candidates?.shift();
 
       if (id === undefined) {
-        tx.insert(vaultSkills)
-          .values({
-            sourceEntryId: entryId,
-            category,
-            name: skill.name,
-            aliases: skill.aliases,
-            level: entry.level,
-            displayOrder: i,
-          })
-          .run();
-        return;
+        await tx.insert(vaultSkills).values({
+          sourceEntryId: entryId,
+          category,
+          name: skill.name,
+          aliases: skill.aliases,
+          level: entry.level,
+          displayOrder: i,
+        });
+        continue;
       }
 
       claimed.add(id);
-      tx.update(vaultSkills)
-        .set({ category, name: skill.name, aliases: skill.aliases, level: entry.level, displayOrder: i })
-        .where(eq(vaultSkills.id, id))
-        .run();
-    });
+      await tx
+        .update(vaultSkills)
+        .set({
+          category,
+          name: skill.name,
+          aliases: skill.aliases,
+          level: entry.level,
+          displayOrder: i,
+        })
+        .where(eq(vaultSkills.id, id));
+    }
 
     for (const row of existing) {
       if (!claimed.has(row.id)) {
-        tx.delete(vaultSkills).where(eq(vaultSkills.id, row.id)).run();
+        await tx.delete(vaultSkills).where(eq(vaultSkills.id, row.id));
       }
     }
   });
@@ -394,132 +392,127 @@ export async function addSkillsToVault(
   category: string,
   names: string[],
 ): Promise<ActionResult<string[]>> {
-  bootstrap();
-
-  const parsed = z
-    .object({
-      category: z.string().trim().min(1, "The category needs a name").max(200),
-      names: z.array(z.string().trim().min(1).max(60)).min(1).max(100),
-    })
-    .safeParse({ category, names });
-  if (!parsed.success) return fail(parsed.error.issues[0]!.message);
-
-  const section = db
-    .select()
-    .from(vaultSections)
-    .where(eq(vaultSections.id, sectionId))
-    .get();
-  if (!section) return fail("That vault section no longer exists");
-  if (section.type !== "skill") {
-    return fail(`"${section.heading}" holds entries with dates and bullets, not skills`);
-  }
-
-  const label = parsed.data.category;
-  const existing = db
-    .select()
-    .from(vaultEntries)
-    .where(eq(vaultEntries.sectionId, sectionId))
-    .all()
-    .find((e) => e.title.trim().toLowerCase() === label.toLowerCase());
-
-  const current = existing ? extractSkills(existing.information).map((s) => s.name) : [];
-  const have = new Set(current.map((n) => n.toLowerCase()));
-
-  const added = parsed.data.names.filter((n) => !have.has(n.toLowerCase()));
-  if (added.length === 0 && existing) return { ok: true, data: [] };
-
-  const information = [...current, ...added].join(" | ");
-
-  if (existing) {
-    db.update(vaultEntries)
-      .set({ information, updatedAt: touch() })
-      .where(eq(vaultEntries.id, existing.id))
-      .run();
-    reindexSkills(existing.id);
-  } else {
-    const last = db
-      .select({ o: vaultEntries.displayOrder })
-      .from(vaultEntries)
-      .where(eq(vaultEntries.sectionId, sectionId))
-      .orderBy(desc(vaultEntries.displayOrder))
-      .get();
-
-    const row = db
-      .insert(vaultEntries)
-      .values({
-        sectionId,
-        title: label,
-        information,
-        displayOrder: (last?.o ?? -1) + 1,
+  return withVault(async () => {
+    const parsed = z
+      .object({
+        category: z.string().trim().min(1, "The category needs a name").max(200),
+        names: z.array(z.string().trim().min(1).max(60)).min(1).max(100),
       })
-      .returning({ id: vaultEntries.id })
-      .get();
+      .safeParse({ category, names });
+    if (!parsed.success) return fail(parsed.error.issues[0]!.message);
 
-    reindexSkills(row.id);
-  }
+    const section = await first(
+      db.select().from(vaultSections).where(eq(vaultSections.id, sectionId)),
+    );
+    if (!section) return fail("That vault section no longer exists");
+    if (section.type !== "skill") {
+      return fail(`"${section.heading}" holds entries with dates and bullets, not skills`);
+    }
 
-  refresh();
-  return { ok: true, data: added };
+    const label = parsed.data.category;
+    const existing = (
+      await db.select().from(vaultEntries).where(eq(vaultEntries.sectionId, sectionId))
+    ).find((e) => e.title.trim().toLowerCase() === label.toLowerCase());
+
+    const current = existing ? extractSkills(existing.information).map((s) => s.name) : [];
+    const have = new Set(current.map((n) => n.toLowerCase()));
+
+    const added = parsed.data.names.filter((n) => !have.has(n.toLowerCase()));
+    if (added.length === 0 && existing) return { ok: true, data: [] };
+
+    const information = [...current, ...added].join(" | ");
+
+    if (existing) {
+      await db
+        .update(vaultEntries)
+        .set({ information, updatedAt: touch() })
+        .where(eq(vaultEntries.id, existing.id));
+      await reindexSkills(existing.id);
+    } else {
+      const last = await first(
+        db
+          .select({ o: vaultEntries.displayOrder })
+          .from(vaultEntries)
+          .where(eq(vaultEntries.sectionId, sectionId))
+          .orderBy(desc(vaultEntries.displayOrder)),
+      );
+
+      const row = (await first(
+        db
+          .insert(vaultEntries)
+          .values({
+            sectionId,
+            title: label,
+            information,
+            displayOrder: (last?.o ?? -1) + 1,
+          })
+          .returning({ id: vaultEntries.id }),
+      ))!;
+
+      await reindexSkills(row.id);
+    }
+
+    refresh();
+    return { ok: true, data: added };
+  });
 }
 
 export async function createEntry(
   sectionId: number,
   input: EntryInput,
 ): Promise<ActionResult<number>> {
-  bootstrap();
+  return withVault(async () => {
+    const parsed = entrySchema.safeParse(input);
+    if (!parsed.success) return fail(parsed.error.issues[0]!.message);
 
-  const parsed = entrySchema.safeParse(input);
-  if (!parsed.success) return fail(parsed.error.issues[0]!.message);
+    const section = await first(
+      db.select().from(vaultSections).where(eq(vaultSections.id, sectionId)),
+    );
+    if (!section) return fail("Section not found");
 
-  const section = db
-    .select()
-    .from(vaultSections)
-    .where(eq(vaultSections.id, sectionId))
-    .get();
-  if (!section) return fail("Section not found");
+    const last = await first(
+      db
+        .select({ o: vaultEntries.displayOrder })
+        .from(vaultEntries)
+        .where(eq(vaultEntries.sectionId, sectionId))
+        .orderBy(desc(vaultEntries.displayOrder)),
+    );
 
-  const last = db
-    .select({ o: vaultEntries.displayOrder })
-    .from(vaultEntries)
-    .where(eq(vaultEntries.sectionId, sectionId))
-    .orderBy(desc(vaultEntries.displayOrder))
-    .get();
+    const row = (await first(
+      db
+        .insert(vaultEntries)
+        .values({ ...parsed.data, sectionId, displayOrder: (last?.o ?? -1) + 1 })
+        .returning({ id: vaultEntries.id }),
+    ))!;
 
-  const row = db
-    .insert(vaultEntries)
-    .values({ ...parsed.data, sectionId, displayOrder: (last?.o ?? -1) + 1 })
-    .returning({ id: vaultEntries.id })
-    .get();
-
-  reindexSkills(row.id);
-  refresh();
-  return { ok: true, data: row.id };
+    await reindexSkills(row.id);
+    refresh();
+    return { ok: true, data: row.id };
+  });
 }
 
-export async function updateEntry(
-  id: number,
-  input: EntryInput,
-): Promise<ActionResult> {
-  bootstrap();
+export async function updateEntry(id: number, input: EntryInput): Promise<ActionResult> {
+  return withVault(async () => {
+    const parsed = entrySchema.safeParse(input);
+    if (!parsed.success) return fail(parsed.error.issues[0]!.message);
 
-  const parsed = entrySchema.safeParse(input);
-  if (!parsed.success) return fail(parsed.error.issues[0]!.message);
+    await db
+      .update(vaultEntries)
+      .set({ ...parsed.data, updatedAt: touch() })
+      .where(eq(vaultEntries.id, id));
 
-  db.update(vaultEntries)
-    .set({ ...parsed.data, updatedAt: touch() })
-    .where(eq(vaultEntries.id, id))
-    .run();
-
-  reindexSkills(id);
-  refresh();
-  return { ok: true };
+    await reindexSkills(id);
+    refresh();
+    return { ok: true };
+  });
 }
 
 export async function deleteEntry(id: number): Promise<ActionResult> {
-  bootstrap();
-  db.delete(vaultEntries).where(eq(vaultEntries.id, id)).run();
-  refresh();
-  return { ok: true };
+  return withVault(async () => {
+    await db.delete(vaultEntries).where(eq(vaultEntries.id, id));
+    refresh();
+    return { ok: true };
+  });
 }
 
 /**
@@ -541,91 +534,85 @@ export async function moveEntryToSection(
   entryId: number,
   targetSectionId: number,
 ): Promise<ActionResult> {
-  bootstrap();
+  return withVault(async () => {
+    const entry = await first(db.select().from(vaultEntries).where(eq(vaultEntries.id, entryId)));
+    if (!entry) return fail("Entry not found");
 
-  const entry = db.select().from(vaultEntries).where(eq(vaultEntries.id, entryId)).get();
-  if (!entry) return fail("Entry not found");
+    if (entry.sectionId === targetSectionId) return { ok: true };
 
-  if (entry.sectionId === targetSectionId) return { ok: true };
-
-  const from = db
-    .select()
-    .from(vaultSections)
-    .where(eq(vaultSections.id, entry.sectionId))
-    .get();
-  const to = db
-    .select()
-    .from(vaultSections)
-    .where(eq(vaultSections.id, targetSectionId))
-    .get();
-
-  if (!to) return fail("That section no longer exists");
-  if (from && from.type !== to.type) {
-    return fail(
-      to.type === "skill"
-        ? `"${to.heading}" holds skill entries — a label plus sub-skills. This entry's dates and bullets would have nowhere to go.`
-        : `"${to.heading}" holds entries with dates and bullets. This is a skill entry, so it would arrive empty.`,
+    const from = await first(
+      db.select().from(vaultSections).where(eq(vaultSections.id, entry.sectionId)),
     );
-  }
+    const to = await first(
+      db.select().from(vaultSections).where(eq(vaultSections.id, targetSectionId)),
+    );
 
-  const last = db
-    .select({ o: vaultEntries.displayOrder })
-    .from(vaultEntries)
-    .where(eq(vaultEntries.sectionId, targetSectionId))
-    .orderBy(desc(vaultEntries.displayOrder))
-    .get();
+    if (!to) return fail("That section no longer exists");
+    if (from && from.type !== to.type) {
+      return fail(
+        to.type === "skill"
+          ? `"${to.heading}" holds skill entries — a label plus sub-skills. This entry's dates and bullets would have nowhere to go.`
+          : `"${to.heading}" holds entries with dates and bullets. This is a skill entry, so it would arrive empty.`,
+      );
+    }
 
-  db.update(vaultEntries)
-    .set({
-      sectionId: targetSectionId,
-      displayOrder: (last?.o ?? -1) + 1,
-      updatedAt: touch(),
-    })
-    .where(eq(vaultEntries.id, entryId))
-    .run();
+    const last = await first(
+      db
+        .select({ o: vaultEntries.displayOrder })
+        .from(vaultEntries)
+        .where(eq(vaultEntries.sectionId, targetSectionId))
+        .orderBy(desc(vaultEntries.displayOrder)),
+    );
 
-  // The derived index records the section it came from, and whether the entry
-  // is indexed at all depends on that section's type.
-  reindexSkills(entryId);
+    await db
+      .update(vaultEntries)
+      .set({
+        sectionId: targetSectionId,
+        displayOrder: (last?.o ?? -1) + 1,
+        updatedAt: touch(),
+      })
+      .where(eq(vaultEntries.id, entryId));
 
-  refresh();
-  return { ok: true };
+    // The derived index records the section it came from, and whether the entry
+    // is indexed at all depends on that section's type.
+    await reindexSkills(entryId);
+
+    refresh();
+    return { ok: true };
+  });
 }
 
 /** Entry order within one section. Entries never move between sections by drag. */
-export async function reorderEntries(
-  sectionId: number,
-  entryIds: number[],
-): Promise<ActionResult> {
-  bootstrap();
+export async function reorderEntries(sectionId: number, entryIds: number[]): Promise<ActionResult> {
+  return withVault(async () => {
+    const parsed = idList.safeParse(entryIds);
+    if (!parsed.success) return fail("Could not read the new entry order");
 
-  const parsed = idList.safeParse(entryIds);
-  if (!parsed.success) return fail("Could not read the new entry order");
+    // Scoped to the section, so a stray id from elsewhere can't be dragged in.
+    const known = new Set(
+      (
+        await db
+          .select({ id: vaultEntries.id })
+          .from(vaultEntries)
+          .where(eq(vaultEntries.sectionId, sectionId))
+      ).map((r) => r.id),
+    );
 
-  // Scoped to the section, so a stray id from elsewhere can't be dragged in.
-  const known = new Set(
-    db
-      .select({ id: vaultEntries.id })
-      .from(vaultEntries)
-      .where(eq(vaultEntries.sectionId, sectionId))
-      .all()
-      .map((r) => r.id),
-  );
+    await db.transaction(async (tx) => {
+      let position = 0;
+      for (const id of parsed.data) {
+        if (!known.has(id)) continue;
+        await tx
+          .update(vaultEntries)
+          .set({ displayOrder: position })
+          .where(eq(vaultEntries.id, id));
+        position += 1;
+      }
+    });
 
-  db.transaction((tx) => {
-    let position = 0;
-    for (const id of parsed.data) {
-      if (!known.has(id)) continue;
-      tx.update(vaultEntries)
-        .set({ displayOrder: position })
-        .where(eq(vaultEntries.id, id))
-        .run();
-      position += 1;
-    }
+    refresh();
+    return { ok: true };
   });
-
-  refresh();
-  return { ok: true };
 }
 
 /* ------------------------------------------------------------------ */
@@ -634,35 +621,34 @@ export async function reorderEntries(
 
 const bulletTextSchema = z.string().trim().min(1, "Bullet cannot be empty").max(1000);
 
-export async function createBullet(
-  entryId: number,
-  text: string,
-): Promise<ActionResult<number>> {
-  bootstrap();
+export async function createBullet(entryId: number, text: string): Promise<ActionResult<number>> {
+  return withVault(async () => {
+    const parsed = bulletTextSchema.safeParse(text);
+    if (!parsed.success) return fail(parsed.error.issues[0]!.message);
 
-  const parsed = bulletTextSchema.safeParse(text);
-  if (!parsed.success) return fail(parsed.error.issues[0]!.message);
+    const last = await first(
+      db
+        .select({ o: vaultBullets.displayOrder })
+        .from(vaultBullets)
+        .where(eq(vaultBullets.entryId, entryId))
+        .orderBy(desc(vaultBullets.displayOrder)),
+    );
 
-  const last = db
-    .select({ o: vaultBullets.displayOrder })
-    .from(vaultBullets)
-    .where(eq(vaultBullets.entryId, entryId))
-    .orderBy(desc(vaultBullets.displayOrder))
-    .get();
+    const row = (await first(
+      db
+        .insert(vaultBullets)
+        .values({
+          entryId,
+          text: parsed.data,
+          strength: bulletStrength(parsed.data),
+          displayOrder: (last?.o ?? -1) + 1,
+        })
+        .returning({ id: vaultBullets.id }),
+    ))!;
 
-  const row = db
-    .insert(vaultBullets)
-    .values({
-      entryId,
-      text: parsed.data,
-      strength: bulletStrength(parsed.data),
-      displayOrder: (last?.o ?? -1) + 1,
-    })
-    .returning({ id: vaultBullets.id })
-    .get();
-
-  refresh();
-  return { ok: true, data: row.id };
+    refresh();
+    return { ok: true, data: row.id };
+  });
 }
 
 export async function updateBullet(
@@ -670,77 +656,79 @@ export async function updateBullet(
   text: string,
   tags: string[] = [],
 ): Promise<ActionResult> {
-  bootstrap();
+  return withVault(async () => {
+    const parsed = bulletTextSchema.safeParse(text);
+    if (!parsed.success) return fail(parsed.error.issues[0]!.message);
 
-  const parsed = bulletTextSchema.safeParse(text);
-  if (!parsed.success) return fail(parsed.error.issues[0]!.message);
+    await db
+      .update(vaultBullets)
+      .set({
+        text: parsed.data,
+        tags: tags
+          .map((t) => t.trim())
+          .filter(Boolean)
+          .slice(0, 12),
+        strength: bulletStrength(parsed.data),
+        updatedAt: touch(),
+      })
+      .where(eq(vaultBullets.id, id));
 
-  db.update(vaultBullets)
-    .set({
-      text: parsed.data,
-      tags: tags.map((t) => t.trim()).filter(Boolean).slice(0, 12),
-      strength: bulletStrength(parsed.data),
-      updatedAt: touch(),
-    })
-    .where(eq(vaultBullets.id, id))
-    .run();
-
-  refresh();
-  return { ok: true };
+    refresh();
+    return { ok: true };
+  });
 }
 
 export async function deleteBullet(id: number): Promise<ActionResult> {
-  bootstrap();
-  db.delete(vaultBullets).where(eq(vaultBullets.id, id)).run();
-  refresh();
-  return { ok: true };
+  return withVault(async () => {
+    await db.delete(vaultBullets).where(eq(vaultBullets.id, id));
+    refresh();
+    return { ok: true };
+  });
 }
 
 export async function toggleBulletPin(id: number): Promise<ActionResult> {
-  bootstrap();
-  const row = db.select().from(vaultBullets).where(eq(vaultBullets.id, id)).get();
-  if (!row) return fail("Bullet not found");
+  return withVault(async () => {
+    const row = await first(db.select().from(vaultBullets).where(eq(vaultBullets.id, id)));
+    if (!row) return fail("Bullet not found");
 
-  db.update(vaultBullets)
-    .set({ isPinned: !row.isPinned, updatedAt: touch() })
-    .where(eq(vaultBullets.id, id))
-    .run();
+    await db
+      .update(vaultBullets)
+      .set({ isPinned: !row.isPinned, updatedAt: touch() })
+      .where(eq(vaultBullets.id, id));
 
-  refresh();
-  return { ok: true };
+    refresh();
+    return { ok: true };
+  });
 }
 
 /** Bullet order within one entry. */
-export async function reorderBullets(
-  entryId: number,
-  bulletIds: number[],
-): Promise<ActionResult> {
-  bootstrap();
+export async function reorderBullets(entryId: number, bulletIds: number[]): Promise<ActionResult> {
+  return withVault(async () => {
+    const parsed = idList.safeParse(bulletIds);
+    if (!parsed.success) return fail("Could not read the new bullet order");
 
-  const parsed = idList.safeParse(bulletIds);
-  if (!parsed.success) return fail("Could not read the new bullet order");
+    const known = new Set(
+      (
+        await db
+          .select({ id: vaultBullets.id })
+          .from(vaultBullets)
+          .where(eq(vaultBullets.entryId, entryId))
+      ).map((r) => r.id),
+    );
 
-  const known = new Set(
-    db
-      .select({ id: vaultBullets.id })
-      .from(vaultBullets)
-      .where(eq(vaultBullets.entryId, entryId))
-      .all()
-      .map((r) => r.id),
-  );
+    await db.transaction(async (tx) => {
+      let position = 0;
+      for (const id of parsed.data) {
+        if (!known.has(id)) continue;
+        await tx
+          .update(vaultBullets)
+          .set({ displayOrder: position })
+          .where(eq(vaultBullets.id, id));
+        position += 1;
+      }
+    });
 
-  db.transaction((tx) => {
-    let position = 0;
-    for (const id of parsed.data) {
-      if (!known.has(id)) continue;
-      tx.update(vaultBullets)
-        .set({ displayOrder: position })
-        .where(eq(vaultBullets.id, id))
-        .run();
-      position += 1;
-    }
+    refresh();
+    return { ok: true };
   });
-
-  refresh();
-  return { ok: true };
 }

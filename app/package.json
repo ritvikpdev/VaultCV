@@ -2,7 +2,7 @@
   "name": "vaultcv",
   "version": "0.1.0",
   "private": true,
-  "description": "Local-first resume tuner. Master vault + composed resumes + JD-driven tuning.",
+  "description": "Resume tuner: a vault of everything you've done, many tailored resumes. Next.js + Supabase.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -14,21 +14,21 @@
     "db:export": "node scripts/db-export.mjs",
     "db:sync": "node scripts/db-export.mjs data/exports/vaultcv-sync.db --force",
     "db:import": "node scripts/db-import.mjs",
-    "predb:push": "node scripts/ensure-data-dir.mjs",
     "db:push": "drizzle-kit push",
-    "predb:studio": "node scripts/ensure-data-dir.mjs",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "vault:import-sqlite": "node --env-file-if-exists=.env.local scripts/import-sqlite-vault.mjs",
+    "db:sql": "node scripts/schema-sql.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.65.0",
-    "better-sqlite3": "^11.10.0",
-    "class-variance-authority": "^0.7.1",
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.117.3",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.44.2",
     "lucide-react": "^0.469.0",
     "next": "^15.5.4",
     "pdf-parse": "1.1.4",
-    "puppeteer": "^24.10.0",
+    "postgres": "^3.4.9",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "server-only": "^0.0.1",
@@ -36,7 +36,7 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
+    "@electric-sql/pglite": "^0.5.8",
     "@types/node": "^22.15.0",
     "@types/pdf-parse": "^1.1.5",
     "@types/react": "^19.1.0",

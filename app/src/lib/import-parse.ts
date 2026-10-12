@@ -1,6 +1,6 @@
 import "server-only";
 
-import { callStructuredVerbose } from "@/lib/ai-provider";
+import { aiAvailable, callStructuredVerbose, type AiConfig } from "@/lib/ai-provider";
 import { parseResumeHeuristically } from "@/lib/heuristic-parse";
 import { ParsedImportSchema, type ParsedImport } from "@/lib/import-schema";
 
@@ -102,18 +102,22 @@ function buildPrompt(text: string): string {
 
 async function parseWithAi(
   text: string,
+  ai: AiConfig,
 ): Promise<{ result: ParsedImport; reason: string }> {
   const tool = buildTool();
 
-  const { data, reason } = await callStructuredVerbose({
-    toolName: tool.name,
-    toolDescription: tool.description,
-    schema: tool.input_schema,
-    // Resumes produce a lot of structured output; 4096 truncated longer ones
-    // mid-JSON, which surfaced only as "parsed locally".
-    maxTokens: 16000,
-    prompt: buildPrompt(text),
-  });
+  const { data, reason } = await callStructuredVerbose(
+    {
+      toolName: tool.name,
+      toolDescription: tool.description,
+      schema: tool.input_schema,
+      // Resumes produce a lot of structured output; 4096 truncated longer ones
+      // mid-JSON, which surfaced only as "parsed locally".
+      maxTokens: 16000,
+      prompt: buildPrompt(text),
+    },
+    ai,
+  );
 
   if (!data) throw new Error(reason || "No structured response");
 
@@ -130,15 +134,14 @@ async function parseWithAi(
  */
 export async function parseResumeText(
   text: string,
+  ai: AiConfig,
 ): Promise<{ result: ParsedImport; source: ParseSource; fallbackReason: string }> {
-  const { aiAvailable } = await import("@/lib/ai-provider");
-
-  if (!aiAvailable()) {
+  if (!aiAvailable(ai)) {
     return { result: parseResumeHeuristically(text), source: "heuristic", fallbackReason: "" };
   }
 
   try {
-    const { result } = await parseWithAi(text);
+    const { result } = await parseWithAi(text, ai);
     return { result, source: "claude", fallbackReason: "" };
   } catch (error) {
     // Falling back is fine. Falling back *silently* is not — the user sees

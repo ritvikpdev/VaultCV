@@ -1,7 +1,4 @@
-import type { SectionType } from "../db/schema.ts";
 import { coerceMonthYear, type ParsedImport, ParsedImportSchema } from "./import-schema.ts";
-import { SECTION_DEFS, getSectionDef } from "./sections.ts";
-import { findAliasSeed } from "./skill-aliases.ts";
 
 /**
  * No-AI resume parser. Always available, always finishes — it exists so
@@ -29,15 +26,6 @@ type EntryDraft = {
 /* ------------------------------------------------------------------ */
 /* Section headers                                                     */
 /* ------------------------------------------------------------------ */
-
-function normalizeHeaderKey(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[:.]+$/, "")
-    .replace(/[^a-z0-9\s&]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 /**
  * Headings that describe a list of skills rather than a list of things you did.

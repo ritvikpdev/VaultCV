@@ -27,8 +27,9 @@ vaultCV separates the two things that were tangled together:
 - **The tuner** — reads a job description and recommends which vault content
   to surface, hide or reorder for this specific role.
 
-Everything runs on one machine. No account, no server, no telemetry. The data
-is a single SQLite file you own.
+It started local-first — one machine, one SQLite file — and is now hosted and
+invite-only, so a few friends can use it and it works from any device. §3a
+covers that move and why it took the shape it did.
 
 ---
 
@@ -87,11 +88,11 @@ degrade with an explanation, never fail invisibly.
 
 ## 3. Architecture
 
-Next.js 15 App Router, React 19, SQLite through Drizzle. Server Components read
-the database directly; mutations are Server Actions next to the route that uses
-them. There is no API layer between the UI and the data, because there is no
-second client to serve — the one exception is `/api/export/[id]`, which needs to
-stream a PDF.
+Next.js 15 App Router, React 19, Postgres (Supabase) through Drizzle, deployed
+on Vercel. Server Components read the database directly; mutations are Server
+Actions next to the route that uses them. There is no API layer between the UI
+and the data, because there is no second client to serve — the exceptions are
+`/api/my-data` (a JSON download) and `/api/health`.
 
 It was built bottom-up: the vault before the resume editor, the editor before
 the tuner. That order was deliberate, not incidental — each layer had real
@@ -103,8 +104,10 @@ by running it on actual résumés rather than by a test passing.
 src/
   db/
     schema.ts        every table — the only source of truth for structure
-    client.ts        lazy better-sqlite3 connection (WAL, foreign keys on)
-    bootstrap.ts     idempotent first-run seed, settings key/value helpers
+    client.ts        postgres-js pool + runAsUser: one transaction per request, as that user
+    session.ts       getSessionUser / withVault — the entry point to all data
+    ai-config.ts     the signed-in user's provider and decrypted key
+    bootstrap.ts     idempotent first-sign-in seed, settings key/value helpers
     queries.ts       vault reads
     resume-queries.ts resume reads, including the snapshot/linked resolve rule
   lib/
@@ -119,12 +122,17 @@ src/
     resume-blocks.ts the renderer's atoms, shared by preview and print
     use-sortable.ts  hand-rolled drag-and-drop
     reorder.ts       pure ordering arithmetic (tested)
+    secret-box.ts    AES-GCM for users' AI keys
+    supabase/        server and admin (service-role) clients
+  middleware.ts      session refresh, sign-in redirect
   app/
     page.tsx         My Resumes
     vault/           the master vault
     resume/[id]/     editor — Content, Customize, Tune tabs
-    print/[id]/      what Puppeteer renders for PDF export
-    settings/        profile, provider status, link mode
+    print/[id]/      what the browser prints for PDF export
+    settings/        profile, AI key, link mode, password, data download, delete
+    admin/           invite links, reset links, delete users (ADMIN_EMAIL only)
+    login/ auth/     sign-in, invite/reset landing, set password
 ```
 
 ### Decisions worth knowing
@@ -133,14 +141,14 @@ src/
 `npm run db:push`. There are no hand-written migrations to drift from it. The
 `drizzle/` folder is generated for tests and is gitignored.
 
-**The database connection is a lazy Proxy.** `next build` imports every route
-module to collect page data. If the connection were created at import time,
-building would open the database as a side effect and hard-fail on any machine
-where the native binding wasn't compiled yet — even though no query ever runs.
+**The database handle is a lazy, scope-bound Proxy.** `next build` imports every
+route module to collect page data; a connection opened at import time would make
+building depend on a reachable database. The Proxy also refuses to work outside
+`runAsUser` — see §3a.
 
 **Preview and PDF share one renderer.** `ResumeDocument` is mounted by both
-`/resume/[id]` and `/print/[id]`; Puppeteer prints the latter. A second renderer
-for export would reintroduce exactly the drift v1 died of.
+`/resume/[id]` and `/print/[id]`; the browser prints the latter. A second
+renderer for export would reintroduce exactly the drift v1 died of.
 
 **Pagination is measured, not estimated.** A hidden pass measures each block's
 `offsetHeight` and splits pages on the same atoms Chrome will. Two subtleties
@@ -159,10 +167,71 @@ number that means neither thing.
 
 ---
 
+## 3a. Going hosted
+
+**Why.** Friends wanted to use it, and Ritvik wanted it on every device. The
+local-first version synced machines through a git-tracked SQLite snapshot —
+one machine at a time, with conflicts that could only be resolved by losing one
+side.
+
+**The plan that was rejected** kept offline editing: a local Next.js + SQLite
+install per person plus a sync server exchanging whole database files with a
+revision number. It solved syncing but not the actual barrier for friends —
+every one of them would still need Node, a native SQLite build and Chromium.
+Most of its complexity (swapping database files on login, unsigned edits,
+offline first-login) served cases that wouldn't occur. Dropping offline editing
+collapsed all of it into "host it once".
+
+**The shape it took.** One Vercel deployment, one Supabase project, both free.
+Postgres holds everyone's vaults in the same fifteen tables, each row carrying
+`user_id`. A separate SQLite file per user was the first idea; it doesn't
+survive serverless hosting, which has no persistent disk.
+
+**Isolation is the database's job.** Every table has a row-level-security
+policy: rows are visible and writable only when `user_id = auth.uid()`. Every
+request runs inside `runAsUser`, one transaction that switches to Supabase's
+`authenticated` role and sets the JWT claims `auth.uid()` reads. The upshot:
+
+- the existing queries — which load whole tables and group in memory — needed
+  no `where user_id` added; Postgres filters before a row leaves the database;
+- inserts never name `user_id`; the column default stamps it;
+- an id guessed from another account matches nothing, rather than relying on
+  every action to check ownership;
+- the `db` Proxy throws outside a scope, so a forgotten wrapper fails loudly
+  instead of quietly querying as nobody — or everybody.
+
+RLS is not optional on Supabase: the publishable key ships to every browser and
+can query any table without a policy. The schema tests fail if any table lacks it.
+
+**What else changed with it.**
+- *Async everywhere.* better-sqlite3 was synchronous; postgres-js isn't. Every
+  query gained an `await`; loops of inserts became single multi-row inserts.
+- *PDF export moved to the browser.* Puppeteer can't run comfortably on free
+  serverless. The Download button prints `/print/[id]` through the browser's
+  own engine — the same Chrome engine Puppeteer drove, same renderer, same
+  real-text output for ATS. Zero `@page` margins reproduce Puppeteer's settings
+  and suppress the browser's header and footer.
+- *AI keys are per user*, encrypted in that user's settings. An environment key
+  would have billed one person for everyone.
+- *Accounts are invite-only.* Signup is off in Supabase; `/admin` generates
+  one-time invite and reset links, so nothing depends on email being set up.
+- *Slow calls stay outside the transaction.* `runTune` and the import parser
+  fetch the user's AI config in one short scope, call the model with no scope
+  open, then write in a second — a transaction shouldn't hold a pooled
+  connection for a minute while a model thinks.
+
+**Costs, stated plainly.** No offline editing. The operator can read everyone's
+data in the Supabase dashboard, and can recover saved AI keys from the server's
+secret — friends should know both. Supabase free pauses after a week idle and
+has no backups; a nightly GitHub Action dump covers both.
+
+---
+
 ## 4. The data model
 
 Fifteen tables in four groups. Every arrow is a foreign key with
-`ON DELETE CASCADE`.
+`ON DELETE CASCADE`. Every table also carries `user_id`, cascading from
+`auth.users`, so deleting an account deletes everything in it.
 
 **Vault (master record)**
 `vault_groups` → `vault_sections` → `vault_entries` → `vault_bullets`, plus
@@ -292,7 +361,8 @@ Everything below is built and working.
   to add the new skills back so the tuner learns them.
 - **One-click compaction** that tightens whitespace before type size, when the
   resume is spilling onto another page.
-- **PDF export** through Puppeteer, rendering the same component as the preview.
+- **PDF export** through the browser's print engine, rendering the same
+  component as the preview.
 
 ### The tuner
 
@@ -305,14 +375,18 @@ Everything below is built and working.
 
 ### Data and setup
 
-- **One SQLite file**, entirely on your machine. No account, no server, no
-  telemetry.
-- **Two-machine sync** through a single git-tracked snapshot, written with
-  `VACUUM INTO` so it's always consistent, and imported with a row-count diff
-  and an automatic backup.
+- **Hosted, invite-only accounts** — Supabase Auth, signup closed, invite and
+  reset links from `/admin`; every vault isolated by row-level security.
+- **Per-user AI keys**, encrypted at rest; optional, like every AI feature.
+- **Your data, yours to take** — a JSON download of everything, and account
+  deletion that cascades through every table.
+- **Nightly encrypted backups** via GitHub Actions, which double as the
+  keep-alive for Supabase's free tier.
+- **One-time import** of a local-first SQLite vault into an account, with id
+  remapping and a per-table count check before commit.
 - **Snapshot vs linked mode**, switchable in Settings.
 
-155 tests pass. The suite deliberately asserts thresholds and relative ordering
+162 tests pass, including schema and isolation tests on in-process Postgres. The suite deliberately asserts thresholds and relative ordering
 rather than exact heuristic scores, so retuning weights doesn't break it.
 
 ---
@@ -333,19 +407,25 @@ Customize sections list is the one that could plausibly outgrow that, since it
 sits in a scrolling panel. When it does, that's the moment for a real DnD
 library rather than extending the hand-rolled hook.
 
-**The two-machine sync is a discipline, not a guarantee.** SQLite is binary, so
-git can't merge it. Editing the vault on both machines before syncing produces
-a conflict whose only resolutions are "keep mine" or "keep theirs". `db:import`
-prints a row-count diff, flags tables that would lose rows, and backs up first —
-recoverable, but still one machine at a time.
+**No offline editing.** The app needs a connection; it was the trade for
+working on any device without a sync protocol.
+
+**PDF output depends a little on the browser.** Chrome and Edge print exactly
+what the preview shows. Safari and Firefox can differ slightly, and some mobile
+browsers print the parent page instead of the hidden frame — the ↗ button opens
+the print view in its own tab for those.
+
+**Free-tier ceilings.** Vercel Hobby caps request bodies at 4.5 MB (large PDF
+imports fail) and is for non-commercial use. Supabase free pauses after 7 idle
+days — the nightly backup prevents it — and keeps no backups of its own.
 
 **`estimatePages()` ignores skills.** It counts entries and bullets only, so a
 large skills section doesn't register in the rough page-count hint. The measured
 preview and the PDF are both correct; only that one warning is off.
 
-**The synced snapshot contains real personal data** and is committed only
-because the repo is private. If that changes, it has to come out of the git
-history, not just the working tree.
+**The old synced snapshot contains real personal data** and is still committed,
+only because the repo is private. Once the Supabase import is verified it should
+be deleted and removed from git history, not just the working tree.
 
 ---
 
@@ -369,9 +449,9 @@ notification rather than a silent update.
 
 **Cover letters.** The vault already holds the raw material.
 
-**A better sync story**, if the two-machine workflow gets heavy. Anything
-involving a SQLite file in Dropbox or OneDrive corrupts databases; the real
-options are a proper server or a text-based export format git can merge.
+**Server-side PDF**, if browser printing proves inconsistent for friends on
+other browsers: serverless Chromium (`@sparticuz/chromium`) can drive the same
+`/print/[id]` page, at the cost of cold starts and bundle-size limits.
 
 ---
 

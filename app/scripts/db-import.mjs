@@ -22,7 +22,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline/promises";
-import Database from "better-sqlite3";
+import { DatabaseSync as Database } from "node:sqlite";
 
 const args = process.argv.slice(2);
 const skipPrompt = args.includes("--yes");
@@ -53,7 +53,7 @@ const dbPath = path.resolve(
 const REQUIRED = ["vault_sections", "vault_entries", "resumes", "profile", "settings"];
 
 function summarise(file) {
-  const db = new Database(file, { readonly: true });
+  const db = new Database(file, { readOnly: true });
   const names = new Set(
     db
       .prepare("select name from sqlite_master where type='table'")

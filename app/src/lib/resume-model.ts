@@ -225,7 +225,7 @@ export function groupSkillsForEditing(skills: ResolvedSection["skills"]) {
 /**
  * Rough page-count estimate from character volume and line height. Used to warn
  * "this is spilling onto page 2" without rendering a PDF on every keystroke.
- * Deliberately approximate — Puppeteer is the source of truth for pagination.
+ * Deliberately approximate — the browser's print engine is the source of truth for pagination.
  */
 export function estimatePages(resume: ResolvedResume): number {
   let chars = 0;

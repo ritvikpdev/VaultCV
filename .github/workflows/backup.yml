@@ -1,0 +1,84 @@
+# Nightly backup of the Supabase database — and the keep-alive.
+#
+# Supabase's free tier has no backups and pauses a project after 7 days
+# without database activity. This dump is database activity, so running it
+# daily covers both problems.
+#
+# Setup (GitHub → repo → Settings → Secrets and variables → Actions):
+#   SUPABASE_DB_URL     the Session pooler connection string (port 5432), with
+#                       the password filled in — same as MIGRATION_DATABASE_URL.
+#   BACKUP_PASSPHRASE   optional but recommended. When set, the dump is
+#                       encrypted before upload; decrypt with
+#                         gpg --decrypt vaultcv-backup.sql.gz.gpg > vaultcv-backup.sql.gz
+#
+# Each run uploads one artifact (Actions → this workflow → a run → Artifacts),
+# kept 30 days. The dump holds every user's vault: personal data. That's why
+# encryption is offered, and why this repo must stay private.
+#
+# Restore into a fresh project whose app tables DON'T exist yet (skip db:push /
+# supabase-schema.sql — the dump recreates the tables, policies included):
+#   gunzip -c vaultcv-backup.sql.gz | psql "$SUPABASE_DB_URL"
+# A brand-new project has no users, so the account rows insert cleanly.
+
+name: Backup database
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # daily, 06:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+    steps:
+      - name: Check configuration
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "::error::Add the SUPABASE_DB_URL secret — see the comment at the top of this workflow."
+            exit 1
+          fi
+
+      # pg_dump must be at least as new as the server; Supabase runs Postgres 17
+      # on new projects, newer than Ubuntu's default client.
+      - name: Install PostgreSQL 17 client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq postgresql-client-17
+
+      - name: Dump
+        run: |
+          # The accounts first, then the app's tables in full. Every row's
+          # user_id references auth.users, so on restore the accounts have to
+          # exist before the foreign keys are recreated.
+          /usr/lib/postgresql/17/bin/pg_dump "$SUPABASE_DB_URL" \
+            --table=auth.users --data-only --no-owner --no-privileges \
+            > vaultcv-backup.sql
+          /usr/lib/postgresql/17/bin/pg_dump "$SUPABASE_DB_URL" \
+            --schema=public --no-owner --no-privileges \
+            >> vaultcv-backup.sql
+          gzip vaultcv-backup.sql
+          ls -lh vaultcv-backup.sql.gz
+
+      - name: Encrypt
+        if: env.BACKUP_PASSPHRASE != ''
+        run: |
+          gpg --batch --yes --symmetric --cipher-algo AES256 \
+            --passphrase "$BACKUP_PASSPHRASE" vaultcv-backup.sql.gz
+          rm vaultcv-backup.sql.gz
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: vaultcv-backup-${{ github.run_number }}
+          path: vaultcv-backup.sql.gz*
+          retention-days: 30
+          if-no-files-found: error

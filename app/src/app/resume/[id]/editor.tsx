@@ -142,7 +142,7 @@ export function ResumeEditor({
         </div>
 
         {/* Live preview — real page sheets. /print/[id] renders the same blocks
-            continuously for Puppeteer. */}
+            continuously for the browser's print. */}
         <div className="min-w-0 flex-1">
           <div className="mb-2 flex items-center justify-between">
             <p className="hint">Preview</p>

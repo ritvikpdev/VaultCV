@@ -28,7 +28,7 @@ import { ResumeBlockView, resumeCssVars } from "./resume-document";
  * page on every keystroke.
  *
  * Caveat worth knowing: this is our pagination, and Chrome's print engine does
- * its own when Puppeteer exports. They agree because both treat `.r-entry` as
+ * its own when the browser prints the export. They agree because both treat `.r-entry` as
  * unbreakable (`break-inside: avoid` in globals.css) and use the same page
  * geometry — but they are two implementations, and a very long single entry is
  * where they're most likely to diverge.

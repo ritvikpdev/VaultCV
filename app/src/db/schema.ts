@@ -1,12 +1,19 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
+  boolean,
+  doublePrecision,
   index,
   integer,
-  real,
-  sqliteTable,
+  jsonb,
+  pgPolicy,
+  pgTable,
+  primaryKey,
   text,
   uniqueIndex,
-} from "drizzle-orm/sqlite-core";
+  uuid,
+} from "drizzle-orm/pg-core";
+import { authenticatedRole, authUsers } from "drizzle-orm/supabase";
 
 /**
  * vaultCV schema.
@@ -21,42 +28,90 @@ import {
  * `resumeBullets` for why they exist even though v1 ships in snapshot mode.
  */
 
-const now = sql`(strftime('%s','now'))`;
+/** Unix seconds, matching what `touch()` in the actions writes. */
+const now = sql`extract(epoch from now())::bigint`;
+const epoch = (name: string) => bigint(name, { mode: "number" });
+
+/**
+ * MULTI-USER ISOLATION
+ * --------------------
+ * Every table carries `user_id`, defaulting to `auth.uid()` — the signed-in
+ * user of the current transaction (see `runAsUser` in client.ts). Inserts never
+ * name it, so no action can file a row under the wrong person by mistake.
+ *
+ * Every table also has the same row-level-security policy: you can see and
+ * write only rows whose `user_id` is yours. That is what makes "load the whole
+ * table and group in memory", which the queries do throughout, safe: Postgres
+ * itself filters to the current user before a row leaves the database.
+ *
+ * RLS is not optional here. Supabase exposes the public schema over its REST
+ * API to anyone holding the publishable key, which ships in the browser. A
+ * table without a policy is a table anyone can read.
+ *
+ * `onDelete: "cascade"` to auth.users means deleting an account (from /admin)
+ * deletes everything that person ever stored.
+ */
+const owner = () =>
+  uuid("user_id")
+    .notNull()
+    .default(sql`auth.uid()`)
+    .references(() => authUsers.id, { onDelete: "cascade" });
+
+const ownRows = () =>
+  pgPolicy("own_rows", {
+    for: "all",
+    to: authenticatedRole,
+    // `(select auth.uid())` rather than `auth.uid()`: evaluated once per
+    // statement instead of once per row — Supabase's documented RLS idiom.
+    using: sql`(select auth.uid()) = user_id`,
+    withCheck: sql`(select auth.uid()) = user_id`,
+  });
 
 /* ------------------------------------------------------------------ */
 /* 1. VAULT                                                            */
 /* ------------------------------------------------------------------ */
 
 /**
- * Singleton row (id is always 1). Contact details that head every resume.
+ * One row per user — enforced by the unique index — created on first sign-in by
+ * `bootstrap()`. Contact details that head every resume.
  */
-export const profile = sqliteTable("profile", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  fullName: text("full_name").notNull().default(""),
-  email: text("email").notNull().default(""),
-  phone: text("phone").notNull().default(""),
-  location: text("location").notNull().default(""),
-  /** JSON: Array<{ label: string; url: string }> — LinkedIn, GitHub, portfolio. */
-  links: text("links", { mode: "json" })
-    .$type<Array<{ label: string; url: string }>>()
-    .notNull()
-    .default(sql`'[]'`),
-  /** Default professional summary. Resumes may override per-application. */
-  summary: text("summary").notNull().default(""),
-  createdAt: integer("created_at").notNull().default(now),
-  updatedAt: integer("updated_at").notNull().default(now),
-});
+export const profile = pgTable(
+  "profile",
+  {
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: owner(),
+    fullName: text("full_name").notNull().default(""),
+    email: text("email").notNull().default(""),
+    phone: text("phone").notNull().default(""),
+    location: text("location").notNull().default(""),
+    /** JSON: Array<{ label: string; url: string }> — LinkedIn, GitHub, portfolio. */
+    links: jsonb("links")
+      .$type<Array<{ label: string; url: string }>>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    /** Default professional summary. Resumes may override per-application. */
+    summary: text("summary").notNull().default(""),
+    createdAt: epoch("created_at").notNull().default(now),
+    updatedAt: epoch("updated_at").notNull().default(now),
+  },
+  (t) => [ownRows(), uniqueIndex("idx_profile_user").on(t.userId)],
+);
 
 /**
  * Optional, user-named grouping for vault sections — purely organisational,
  * for the sidebar. Sections don't need a group.
  */
-export const vaultGroups = sqliteTable("vault_groups", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  name: text("name").notNull(),
-  displayOrder: integer("display_order").notNull().default(0),
-  createdAt: integer("created_at").notNull().default(now),
-});
+export const vaultGroups = pgTable(
+  "vault_groups",
+  {
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: owner(),
+    name: text("name").notNull(),
+    displayOrder: integer("display_order").notNull().default(0),
+    createdAt: epoch("created_at").notNull().default(now),
+  },
+  (t) => [ownRows(), index("idx_vault_groups_user").on(t.userId)],
+);
 
 /**
  * A vault section, created and named entirely by the user.
@@ -71,10 +126,11 @@ export const vaultGroups = sqliteTable("vault_groups", {
  *   normal — title, dates, organisation, bullet points
  *   skill  — a label plus a list of sub-skills, rendered as one line
  */
-export const vaultSections = sqliteTable(
+export const vaultSections = pgTable(
   "vault_sections",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: owner(),
     heading: text("heading").notNull(),
     /** normal | skill */
     type: text("type").notNull().default("normal"),
@@ -84,11 +140,13 @@ export const vaultSections = sqliteTable(
       onDelete: "set null",
     }),
     displayOrder: integer("display_order").notNull().default(0),
-    createdAt: integer("created_at").notNull().default(now),
+    createdAt: epoch("created_at").notNull().default(now),
   },
-  (t) => ({
-    byGroup: index("idx_vault_sections_group").on(t.groupId, t.displayOrder),
-  }),
+  (t) => [
+    ownRows(),
+    index("idx_vault_sections_user").on(t.userId),
+    index("idx_vault_sections_group").on(t.groupId, t.displayOrder),
+  ],
 );
 
 /**
@@ -121,10 +179,11 @@ export type SectionType = (typeof SECTION_TYPES)[number];
  * One thing you did: a job, a degree, a project, a paper, a certification.
  * Section-specific extras live in `meta` rather than sprawling nullable columns.
  */
-export const vaultEntries = sqliteTable(
+export const vaultEntries = pgTable(
   "vault_entries",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: owner(),
     sectionId: integer("section_id")
       .notNull()
       .references(() => vaultSections.id, { onDelete: "cascade" }),
@@ -146,7 +205,7 @@ export const vaultEntries = sqliteTable(
     /** Stored as "MM/YYYY" to match how resumes actually display dates. */
     startDate: text("start_date").notNull().default(""),
     endDate: text("end_date").notNull().default(""),
-    isCurrent: integer("is_current", { mode: "boolean" }).notNull().default(false),
+    isCurrent: boolean("is_current").notNull().default(false),
     url: text("url").notNull().default(""),
     /** Short italic line under the title, e.g. "Distributed LLM inference system built in Go". */
     subtitle: text("subtitle").notNull().default(""),
@@ -155,52 +214,57 @@ export const vaultEntries = sqliteTable(
      * education → { gpa }, project → { techStack[] }, certification → { issuer, credentialId },
      * publication → { venue, doi, authors }.
      */
-    meta: text("meta", { mode: "json" })
+    meta: jsonb("meta")
       .$type<Record<string, unknown>>()
       .notNull()
-      .default(sql`'{}'`),
+      .default(sql`'{}'::jsonb`),
     displayOrder: integer("display_order").notNull().default(0),
-    isArchived: integer("is_archived", { mode: "boolean" }).notNull().default(false),
-    createdAt: integer("created_at").notNull().default(now),
-    updatedAt: integer("updated_at").notNull().default(now),
+    isArchived: boolean("is_archived").notNull().default(false),
+    createdAt: epoch("created_at").notNull().default(now),
+    updatedAt: epoch("updated_at").notNull().default(now),
   },
-  (t) => ({
-    bySection: index("idx_vault_entries_section").on(t.sectionId, t.displayOrder),
-  }),
+  (t) => [
+    ownRows(),
+    index("idx_vault_entries_user").on(t.userId),
+    index("idx_vault_entries_section").on(t.sectionId, t.displayOrder),
+  ],
 );
 
 /**
  * An achievement statement under an entry. The atomic unit the tuner reasons
  * about — everything the matcher scores is a bullet.
  */
-export const vaultBullets = sqliteTable(
+export const vaultBullets = pgTable(
   "vault_bullets",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: owner(),
     entryId: integer("entry_id")
       .notNull()
       .references(() => vaultEntries.id, { onDelete: "cascade" }),
     text: text("text").notNull(),
     /** JSON string[] — free-form labels used for filtering and match context. */
-    tags: text("tags", { mode: "json" })
+    tags: jsonb("tags")
       .$type<string[]>()
       .notNull()
-      .default(sql`'[]'`),
+      .default(sql`'[]'::jsonb`),
     /**
      * 1–5, computed locally from action verbs, presence of metrics and length.
      * No AI involved — this must work with no API key.
      */
     strength: integer("strength").notNull().default(3),
     /** Pinned bullets are pre-selected when tuning against any JD. */
-    isPinned: integer("is_pinned", { mode: "boolean" }).notNull().default(false),
-    isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+    isPinned: boolean("is_pinned").notNull().default(false),
+    isActive: boolean("is_active").notNull().default(true),
     displayOrder: integer("display_order").notNull().default(0),
-    createdAt: integer("created_at").notNull().default(now),
-    updatedAt: integer("updated_at").notNull().default(now),
+    createdAt: epoch("created_at").notNull().default(now),
+    updatedAt: epoch("updated_at").notNull().default(now),
   },
-  (t) => ({
-    byEntry: index("idx_vault_bullets_entry").on(t.entryId, t.displayOrder),
-  }),
+  (t) => [
+    ownRows(),
+    index("idx_vault_bullets_user").on(t.userId),
+    index("idx_vault_bullets_entry").on(t.entryId, t.displayOrder),
+  ],
 );
 
 /**
@@ -219,10 +283,11 @@ export const vaultBullets = sqliteTable(
  * `aliases` is what makes deterministic matching work with no API key: a JD
  * saying "k8s" or "container orchestration" still resolves to Kubernetes.
  */
-export const vaultSkills = sqliteTable(
+export const vaultSkills = pgTable(
   "vault_skills",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: owner(),
     /** The skill entry this was extracted from. Cascades on delete. */
     sourceEntryId: integer("source_entry_id")
       .notNull()
@@ -232,21 +297,23 @@ export const vaultSkills = sqliteTable(
     /** Canonical name where the taxonomy recognised it, else as written. */
     name: text("name").notNull(),
     /** JSON string[] of alternate spellings the JD might use. */
-    aliases: text("aliases", { mode: "json" })
+    aliases: jsonb("aliases")
       .$type<string[]>()
       .notNull()
-      .default(sql`'[]'`),
+      .default(sql`'[]'::jsonb`),
     level: text("level").notNull().default(""),
     displayOrder: integer("display_order").notNull().default(0),
-    createdAt: integer("created_at").notNull().default(now),
+    createdAt: epoch("created_at").notNull().default(now),
   },
-  (t) => ({
+  (t) => [
+    ownRows(),
+    index("idx_vault_skills_user").on(t.userId),
     // Deliberately NOT unique on name: the same technology may legitimately
     // appear under two entries, and a unique constraint on derived data would
     // make a save fail for a reason the user can't see or fix.
-    bySource: index("idx_vault_skills_source").on(t.sourceEntryId),
-    byName: index("idx_vault_skills_name").on(t.name),
-  }),
+    index("idx_vault_skills_source").on(t.sourceEntryId),
+    index("idx_vault_skills_name").on(t.name),
+  ],
 );
 
 /* ------------------------------------------------------------------ */
@@ -257,57 +324,68 @@ export const vaultSkills = sqliteTable(
  * Presentation settings. Split from `resumes` so a style can be reused or reset
  * without touching content, and so the customize tab writes to one small row.
  */
-export const resumeStyles = sqliteTable("resume_styles", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  fontFamily: text("font_family").notNull().default('"Times New Roman", Times, serif'),
-  /** Points. Drives --r-base-size. */
-  baseSize: real("base_size").notNull().default(10),
-  /** Points, absolute (not a delta) so the renderer stays dumb. */
-  nameSize: real("name_size").notNull().default(21),
-  headingSize: real("heading_size").notNull().default(11),
-  lineHeight: real("line_height").notNull().default(1.25),
-  /** Points of vertical space between sections / entries / bullets. */
-  sectionGap: real("section_gap").notNull().default(10),
-  entryGap: real("entry_gap").notNull().default(6),
-  bulletGap: real("bullet_gap").notNull().default(2),
-  /** Inches. */
-  marginX: real("margin_x").notNull().default(0.5),
-  marginY: real("margin_y").notNull().default(0.5),
-  /** plain | underline | rule | caps */
-  headingStyle: text("heading_style").notNull().default("rule"),
-  accentColor: text("accent_color").notNull().default("#000000"),
-  /** letter | a4 */
-  pageSize: text("page_size").notNull().default("letter"),
-  /**
-   * Where an entry's dates and location sit.
-   *   right — same line as the title, right-aligned (the reference resumes)
-   *   below — stacked under the title, left-aligned
-   */
-  datePosition: text("date_position").notNull().default("right"),
-  /** How the employer / subtitle line renders: normal | bold | italic */
-  subtitleStyle: text("subtitle_style").notNull().default("italic"),
-});
+export const resumeStyles = pgTable(
+  "resume_styles",
+  {
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: owner(),
+    fontFamily: text("font_family").notNull().default('"Times New Roman", Times, serif'),
+    /** Points. Drives --r-base-size. */
+    baseSize: doublePrecision("base_size").notNull().default(10),
+    /** Points, absolute (not a delta) so the renderer stays dumb. */
+    nameSize: doublePrecision("name_size").notNull().default(21),
+    headingSize: doublePrecision("heading_size").notNull().default(11),
+    lineHeight: doublePrecision("line_height").notNull().default(1.25),
+    /** Points of vertical space between sections / entries / bullets. */
+    sectionGap: doublePrecision("section_gap").notNull().default(10),
+    entryGap: doublePrecision("entry_gap").notNull().default(6),
+    bulletGap: doublePrecision("bullet_gap").notNull().default(2),
+    /** Inches. */
+    marginX: doublePrecision("margin_x").notNull().default(0.5),
+    marginY: doublePrecision("margin_y").notNull().default(0.5),
+    /** plain | underline | rule | caps */
+    headingStyle: text("heading_style").notNull().default("rule"),
+    accentColor: text("accent_color").notNull().default("#000000"),
+    /** letter | a4 */
+    pageSize: text("page_size").notNull().default("letter"),
+    /**
+     * Where an entry's dates and location sit.
+     *   right — same line as the title, right-aligned (the reference resumes)
+     *   below — stacked under the title, left-aligned
+     */
+    datePosition: text("date_position").notNull().default("right"),
+    /** How the employer / subtitle line renders: normal | bold | italic */
+    subtitleStyle: text("subtitle_style").notNull().default("italic"),
+  },
+  (t) => [ownRows(), index("idx_resume_styles_user").on(t.userId)],
+);
 
-export const resumes = sqliteTable("resumes", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  name: text("name").notNull().default("Untitled resume"),
-  targetRole: text("target_role").notNull().default(""),
-  targetCompany: text("target_company").notNull().default(""),
-  styleId: integer("style_id")
-    .notNull()
-    .references(() => resumeStyles.id, { onDelete: "restrict" }),
-  /** Per-resume summary override. Empty string falls back to profile.summary. */
-  summaryOverride: text("summary_override").notNull().default(""),
-  /** draft | exported | sent */
-  status: text("status").notNull().default("draft"),
-  createdAt: integer("created_at").notNull().default(now),
-  updatedAt: integer("updated_at").notNull().default(now),
-});
+export const resumes = pgTable(
+  "resumes",
+  {
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: owner(),
+    name: text("name").notNull().default("Untitled resume"),
+    targetRole: text("target_role").notNull().default(""),
+    targetCompany: text("target_company").notNull().default(""),
+    styleId: integer("style_id")
+      .notNull()
+      .references(() => resumeStyles.id, { onDelete: "restrict" }),
+    /** Per-resume summary override. Empty string falls back to profile.summary. */
+    summaryOverride: text("summary_override").notNull().default(""),
+    /** draft | exported | sent */
+    status: text("status").notNull().default("draft"),
+    createdAt: epoch("created_at").notNull().default(now),
+    updatedAt: epoch("updated_at").notNull().default(now),
+  },
+  (t) => [ownRows(), index("idx_resumes_user").on(t.userId)],
+);
 
-export const resumeSections = sqliteTable(
+export const resumeSections = pgTable(
   "resume_sections",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: owner(),
     resumeId: integer("resume_id")
       .notNull()
       .references(() => resumes.id, { onDelete: "cascade" }),
@@ -317,15 +395,15 @@ export const resumeSections = sqliteTable(
     /** normal | skill — skill sections render inline comma lists, not bullets. */
     layout: text("layout").notNull().default("normal"),
     displayOrder: integer("display_order").notNull().default(0),
-    isVisible: integer("is_visible", { mode: "boolean" }).notNull().default(true),
+    isVisible: boolean("is_visible").notNull().default(true),
     /** Insert a hard page break after this section. */
-    pageBreakAfter: integer("page_break_after", { mode: "boolean" })
-      .notNull()
-      .default(false),
+    pageBreakAfter: boolean("page_break_after").notNull().default(false),
   },
-  (t) => ({
-    byResume: index("idx_resume_sections_resume").on(t.resumeId, t.displayOrder),
-  }),
+  (t) => [
+    ownRows(),
+    index("idx_resume_sections_user").on(t.userId),
+    index("idx_resume_sections_resume").on(t.resumeId, t.displayOrder),
+  ],
 );
 
 /**
@@ -335,10 +413,11 @@ export const resumeSections = sqliteTable(
  * says", a value means "this resume disagrees". In snapshot mode the app writes
  * these eagerly; in linked mode it leaves them NULL until you type.
  */
-export const resumeEntries = sqliteTable(
+export const resumeEntries = pgTable(
   "resume_entries",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: owner(),
     sectionId: integer("section_id")
       .notNull()
       .references(() => resumeSections.id, { onDelete: "cascade" }),
@@ -353,12 +432,14 @@ export const resumeEntries = sqliteTable(
     startDateOverride: text("start_date_override"),
     endDateOverride: text("end_date_override"),
     displayOrder: integer("display_order").notNull().default(0),
-    isVisible: integer("is_visible", { mode: "boolean" }).notNull().default(true),
+    isVisible: boolean("is_visible").notNull().default(true),
   },
-  (t) => ({
-    bySection: index("idx_resume_entries_section").on(t.sectionId, t.displayOrder),
-    bySource: index("idx_resume_entries_source").on(t.sourceEntryId),
-  }),
+  (t) => [
+    ownRows(),
+    index("idx_resume_entries_user").on(t.userId),
+    index("idx_resume_entries_section").on(t.sectionId, t.displayOrder),
+    index("idx_resume_entries_source").on(t.sourceEntryId),
+  ],
 );
 
 /**
@@ -377,10 +458,11 @@ export const resumeEntries = sqliteTable(
  *
  * That is the whole cost of deferring the snapshot-vs-linked decision.
  */
-export const resumeBullets = sqliteTable(
+export const resumeBullets = pgTable(
   "resume_bullets",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: owner(),
     resumeEntryId: integer("resume_entry_id")
       .notNull()
       .references(() => resumeEntries.id, { onDelete: "cascade" }),
@@ -391,19 +473,22 @@ export const resumeBullets = sqliteTable(
     /** Snapshot mode: always set. Linked mode: NULL means "read from vault". */
     text: text("text"),
     displayOrder: integer("display_order").notNull().default(0),
-    isVisible: integer("is_visible", { mode: "boolean" }).notNull().default(true),
+    isVisible: boolean("is_visible").notNull().default(true),
   },
-  (t) => ({
-    byEntry: index("idx_resume_bullets_entry").on(t.resumeEntryId, t.displayOrder),
-    bySource: index("idx_resume_bullets_source").on(t.sourceBulletId),
-  }),
+  (t) => [
+    ownRows(),
+    index("idx_resume_bullets_user").on(t.userId),
+    index("idx_resume_bullets_entry").on(t.resumeEntryId, t.displayOrder),
+    index("idx_resume_bullets_source").on(t.sourceBulletId),
+  ],
 );
 
 /** Skills chosen for one resume, in display order, grouped by category. */
-export const resumeSkills = sqliteTable(
+export const resumeSkills = pgTable(
   "resume_skills",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: owner(),
     sectionId: integer("section_id")
       .notNull()
       .references(() => resumeSections.id, { onDelete: "cascade" }),
@@ -414,11 +499,13 @@ export const resumeSkills = sqliteTable(
     nameOverride: text("name_override"),
     categoryOverride: text("category_override"),
     displayOrder: integer("display_order").notNull().default(0),
-    isVisible: integer("is_visible", { mode: "boolean" }).notNull().default(true),
+    isVisible: boolean("is_visible").notNull().default(true),
   },
-  (t) => ({
-    bySection: index("idx_resume_skills_section").on(t.sectionId, t.displayOrder),
-  }),
+  (t) => [
+    ownRows(),
+    index("idx_resume_skills_user").on(t.userId),
+    index("idx_resume_skills_section").on(t.sectionId, t.displayOrder),
+  ],
 );
 
 /* ------------------------------------------------------------------ */
@@ -446,22 +533,21 @@ export type JdParsed = {
   source: "claude" | "heuristic";
 };
 
-export const jobDescriptions = sqliteTable("job_descriptions", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  rawText: text("raw_text").notNull(),
-  parsed: text("parsed", { mode: "json" }).$type<JdParsed | null>(),
-  createdAt: integer("created_at").notNull().default(now),
-});
+export const jobDescriptions = pgTable(
+  "job_descriptions",
+  {
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: owner(),
+    rawText: text("raw_text").notNull(),
+    parsed: jsonb("parsed").$type<JdParsed | null>(),
+    createdAt: epoch("created_at").notNull().default(now),
+  },
+  (t) => [ownRows(), index("idx_job_descriptions_user").on(t.userId)],
+);
 
 export type Recommendation = {
   id: string;
-  type:
-    | "ADD_BULLET"
-    | "REMOVE_BULLET"
-    | "ADD_ENTRY"
-    | "ADD_SKILL"
-    | "REORDER"
-    | "EDIT_BULLET";
+  type: "ADD_BULLET" | "REMOVE_BULLET" | "ADD_ENTRY" | "ADD_SKILL" | "REORDER" | "EDIT_BULLET";
   /** Human-readable statement of the change. */
   label: string;
   /** Why — which requirement ids this addresses. */
@@ -477,27 +563,30 @@ export type Recommendation = {
  * One tuning pass of a resume against a JD. Recommendations are stored rather
  * than recomputed so dismissing a suggestion sticks across page reloads.
  */
-export const tuneRuns = sqliteTable(
+export const tuneRuns = pgTable(
   "tune_runs",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+    userId: owner(),
     resumeId: integer("resume_id")
       .notNull()
       .references(() => resumes.id, { onDelete: "cascade" }),
     jdId: integer("jd_id")
       .notNull()
       .references(() => jobDescriptions.id, { onDelete: "cascade" }),
-    recommendations: text("recommendations", { mode: "json" })
+    recommendations: jsonb("recommendations")
       .$type<Recommendation[]>()
       .notNull()
-      .default(sql`'[]'`),
+      .default(sql`'[]'::jsonb`),
     /** Fraction of must-have requirements covered at the time of the run, 0–1. */
-    coverage: real("coverage").notNull().default(0),
-    createdAt: integer("created_at").notNull().default(now),
+    coverage: doublePrecision("coverage").notNull().default(0),
+    createdAt: epoch("created_at").notNull().default(now),
   },
-  (t) => ({
-    byResume: index("idx_tune_runs_resume").on(t.resumeId, t.createdAt),
-  }),
+  (t) => [
+    ownRows(),
+    index("idx_tune_runs_user").on(t.userId),
+    index("idx_tune_runs_resume").on(t.resumeId, t.createdAt),
+  ],
 );
 
 /* ------------------------------------------------------------------ */
@@ -508,10 +597,16 @@ export const tuneRuns = sqliteTable(
  * Key/value settings that belong in the DB rather than localStorage, because
  * server code reads them too (e.g. vaultLinkMode during resume render).
  */
-export const settings = sqliteTable("settings", {
-  key: text("key").primaryKey(),
-  value: text("value").notNull(),
-});
+export const settings = pgTable(
+  "settings",
+  {
+    userId: owner(),
+    key: text("key").notNull(),
+    value: text("value").notNull(),
+  },
+  // Keys are per user, so the key alone can't be the primary key.
+  (t) => [ownRows(), primaryKey({ columns: [t.userId, t.key] })],
+);
 
 /* ------------------------------------------------------------------ */
 /* Inferred types                                                      */

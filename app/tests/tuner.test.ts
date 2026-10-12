@@ -35,16 +35,18 @@ Benefits
 - Health insurance and unlimited PTO
 `;
 
+const USER = "00000000-0000-0000-0000-000000000001";
+
 function bullet(id: number, entryId: number, text: string, strength = 4): VaultBullet {
   return {
-    id, entryId, text, tags: [], strength, isPinned: false, isActive: true,
+    id, userId: USER, entryId, text, tags: [], strength, isPinned: false, isActive: true,
     displayOrder: id, createdAt: 0, updatedAt: 0,
   };
 }
 
 function entry(id: number, title: string, sectionHeading: string): VaultEntry & { sectionHeading: string } {
   return {
-    id, sectionId: 1, sectionHeading, title, organization: "Acme", location: "", startDate: "01/2022",
+    id, userId: USER, sectionId: 1, sectionHeading, title, organization: "Acme", location: "", startDate: "01/2022",
     endDate: "01/2024", isCurrent: false, url: "", subtitle: "", information: "", level: "", meta: {},
     displayOrder: id, isArchived: false, createdAt: 0, updatedAt: 0,
   };
@@ -54,12 +56,12 @@ function emptyResume(): ResolvedResume {
   return {
     id: 1, name: "Test", targetRole: "", targetCompany: "",
     profile: {
-      id: 1, fullName: "Ritvik", email: "r@example.com", phone: "", location: "",
+      id: 1, userId: USER, fullName: "Ritvik", email: "r@example.com", phone: "", location: "",
       links: [], summary: "", createdAt: 0, updatedAt: 0,
     },
     summary: "",
     style: {
-      id: 1, fontFamily: "serif", baseSize: 10, nameSize: 21, headingSize: 11,
+      id: 1, userId: USER, fontFamily: "serif", baseSize: 10, nameSize: 21, headingSize: 11,
       lineHeight: 1.25, sectionGap: 10, entryGap: 6, bulletGap: 2, marginX: 0.5,
       marginY: 0.5, headingStyle: "rule", accentColor: "#000", pageSize: "letter",
       datePosition: "right", subtitleStyle: "italic",
@@ -220,8 +222,8 @@ describe("recommendations", () => {
   ];
 
   const vaultSkills: VaultSkill[] = [
-    { id: 1, sourceEntryId: 99, category: "Cloud & DevOps", name: "Kubernetes", aliases: ["k8s"], level: "", displayOrder: 0, createdAt: 0 },
-    { id: 2, sourceEntryId: 99, category: "Personal", name: "Watercolour painting", aliases: [], level: "", displayOrder: 1, createdAt: 0 },
+    { id: 1, userId: USER, sourceEntryId: 99, category: "Cloud & DevOps", name: "Kubernetes", aliases: ["k8s"], level: "", displayOrder: 0, createdAt: 0 },
+    { id: 2, userId: USER, sourceEntryId: 99, category: "Personal", name: "Watercolour painting", aliases: [], level: "", displayOrder: 1, createdAt: 0 },
   ];
 
   test("suggests vault content that fills a gap in an empty resume", () => {

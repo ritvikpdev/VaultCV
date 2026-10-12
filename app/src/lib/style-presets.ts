@@ -101,7 +101,7 @@ export function clampStyleValue(key: NumericStyleKey, value: number): number {
 }
 
 /** Matches the column defaults in schema.ts. Used by "Reset to defaults". */
-export const DEFAULT_STYLE: Omit<ResumeStyle, "id"> = {
+export const DEFAULT_STYLE: Omit<ResumeStyle, "id" | "userId"> = {
   fontFamily: '"Times New Roman", Times, serif',
   baseSize: 10,
   nameSize: 21,

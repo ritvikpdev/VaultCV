@@ -1,9 +1,9 @@
 import "server-only";
 
-import { asc, eq } from "drizzle-orm";
+import { asc, desc, eq } from "drizzle-orm";
 
-import { db } from "./client";
-import { bootstrap, getProfile, getSetting, SETTING_KEYS } from "./bootstrap";
+import { db, first } from "./client";
+import { getProfile, getSetting, SETTING_KEYS } from "./bootstrap";
 import {
   resumeBullets,
   resumeEntries,
@@ -25,45 +25,38 @@ import {
   type VaultLinkMode,
 } from "../lib/resume-model";
 
-export function vaultLinkMode(): VaultLinkMode {
-  return getSetting(SETTING_KEYS.vaultLinkMode) === "linked" ? "linked" : "snapshot";
+export async function vaultLinkMode(): Promise<VaultLinkMode> {
+  return (await getSetting(SETTING_KEYS.vaultLinkMode)) === "linked" ? "linked" : "snapshot";
 }
 
-export function listResumes() {
-  bootstrap();
-  return db.select().from(resumes).orderBy(asc(resumes.updatedAt)).all().reverse();
+export async function listResumes() {
+  return db.select().from(resumes).orderBy(desc(resumes.updatedAt));
 }
 
 /**
  * A whole resume, resolved and ready to render.
  *
- * Loads the vault tables wholesale rather than joining per row. At vault scale
- * that's a handful of small reads from local SQLite, and it keeps the resolve
- * step (which is where the snapshot/linked rule lives) in one readable place
- * instead of spread across SQL.
+ * Loads the vault tables wholesale rather than joining per row — the current
+ * user's rows only, by row-level security. At vault scale that's a handful of
+ * small reads, and it keeps the resolve step (which is where the
+ * snapshot/linked rule lives) in one readable place instead of spread across
+ * SQL.
  */
-export function getResumeFull(id: number): ResolvedResume | null {
-  bootstrap();
-
-  const resume = db.select().from(resumes).where(eq(resumes.id, id)).get();
+export async function getResumeFull(id: number): Promise<ResolvedResume | null> {
+  const resume = await first(db.select().from(resumes).where(eq(resumes.id, id)));
   if (!resume) return null;
 
-  const style = db
-    .select()
-    .from(resumeStyles)
-    .where(eq(resumeStyles.id, resume.styleId))
-    .get();
+  const [style, mode, profile, sectionRows] = await Promise.all([
+    first(db.select().from(resumeStyles).where(eq(resumeStyles.id, resume.styleId))),
+    vaultLinkMode(),
+    getProfile(),
+    db
+      .select()
+      .from(resumeSections)
+      .where(eq(resumeSections.resumeId, id))
+      .orderBy(asc(resumeSections.displayOrder)),
+  ]);
   if (!style) return null;
-
-  const mode = vaultLinkMode();
-  const profile = getProfile();
-
-  const sectionRows = db
-    .select()
-    .from(resumeSections)
-    .where(eq(resumeSections.resumeId, id))
-    .orderBy(asc(resumeSections.displayOrder))
-    .all();
 
   const sectionIds = new Set(sectionRows.map((s) => s.id));
   if (sectionIds.size === 0) {
@@ -79,33 +72,25 @@ export function getResumeFull(id: number): ResolvedResume | null {
     };
   }
 
-  const entryRows = db
-    .select()
-    .from(resumeEntries)
-    .orderBy(asc(resumeEntries.displayOrder))
-    .all()
-    .filter((e) => sectionIds.has(e.sectionId));
+  const [allEntryRows, allBulletRows, allSkillRows, vEntryRows, vBulletRows, vSkillRows] =
+    await Promise.all([
+      db.select().from(resumeEntries).orderBy(asc(resumeEntries.displayOrder)),
+      db.select().from(resumeBullets).orderBy(asc(resumeBullets.displayOrder)),
+      db.select().from(resumeSkills).orderBy(asc(resumeSkills.displayOrder)),
+      // Vault lookups, only needed when an override is absent.
+      db.select().from(vaultEntries),
+      db.select().from(vaultBullets),
+      db.select().from(vaultSkills),
+    ]);
 
+  const entryRows = allEntryRows.filter((e) => sectionIds.has(e.sectionId));
   const entryIds = new Set(entryRows.map((e) => e.id));
+  const bulletRows = allBulletRows.filter((b) => entryIds.has(b.resumeEntryId));
+  const skillRows = allSkillRows.filter((s) => sectionIds.has(s.sectionId));
 
-  const bulletRows = db
-    .select()
-    .from(resumeBullets)
-    .orderBy(asc(resumeBullets.displayOrder))
-    .all()
-    .filter((b) => entryIds.has(b.resumeEntryId));
-
-  const skillRows = db
-    .select()
-    .from(resumeSkills)
-    .orderBy(asc(resumeSkills.displayOrder))
-    .all()
-    .filter((s) => sectionIds.has(s.sectionId));
-
-  // Vault lookups, only needed when an override is absent.
-  const vEntries = new Map(db.select().from(vaultEntries).all().map((e) => [e.id, e]));
-  const vBullets = new Map(db.select().from(vaultBullets).all().map((b) => [b.id, b]));
-  const vSkills = new Map(db.select().from(vaultSkills).all().map((s) => [s.id, s]));
+  const vEntries = new Map(vEntryRows.map((e) => [e.id, e]));
+  const vBullets = new Map(vBulletRows.map((b) => [b.id, b]));
+  const vSkills = new Map(vSkillRows.map((s) => [s.id, s]));
 
   const bulletsByEntry = new Map<number, ReturnType<typeof resolveBullet>[]>();
   for (const row of bulletRows) {
@@ -157,45 +142,30 @@ export function getResumeFull(id: number): ResolvedResume | null {
 }
 
 /**
- * Vault content available to a section, with the ids already used in this
- * resume marked. Drives the Pull-from-Vault picker — this is one of the things
- * `source_entry_id` is load-bearing for.
+ * Vault content available to every section of a resume, with the ids already
+ * used marked per section. Drives the Pull-from-Vault picker — this is one of
+ * the things `source_entry_id` is load-bearing for.
+ *
+ * One call for the whole resume, where it used to be one per section: the
+ * vault reads are identical for every section, and repeating them is a round
+ * trip each now that the database isn't a local file.
  */
-export function vaultOptionsForSection(resumeId: number, sectionId: number) {
-  bootstrap();
-
-  const section = db
-    .select()
-    .from(resumeSections)
-    .where(eq(resumeSections.id, sectionId))
-    .get();
-  if (!section)
-    return { sections: [], entries: [], skills: [], usedEntryIds: new Set<number>() };
-
-  const usedEntryIds = new Set(
-    db
-      .select()
-      .from(resumeEntries)
-      .all()
-      .filter((e) => e.sectionId === sectionId && e.sourceEntryId !== null)
-      .map((e) => e.sourceEntryId!),
-  );
-
-  // Every vault entry, not just one section's. Vault sections are user-defined
-  // now, so a resume section can't infer which one it corresponds to — the
-  // picker offers all of them, grouped by their vault section, and lets the
-  // user choose which one to draw from.
-  const entries = db
-    .select()
-    .from(vaultEntries)
-    .orderBy(asc(vaultEntries.displayOrder))
-    .all();
-
-  const allBullets = db
-    .select()
-    .from(vaultBullets)
-    .orderBy(asc(vaultBullets.displayOrder))
-    .all();
+export async function vaultOptionsForResume(sectionIds: number[]) {
+  const [resumeEntryRows, entries, allBullets, skills, sections] = await Promise.all([
+    db.select().from(resumeEntries),
+    // Every vault entry, not just one section's. Vault sections are
+    // user-defined, so a resume section can't infer which one it corresponds
+    // to — the picker offers all of them, grouped by their vault section, and
+    // lets the user choose which one to draw from.
+    db.select().from(vaultEntries).orderBy(asc(vaultEntries.displayOrder)),
+    db.select().from(vaultBullets).orderBy(asc(vaultBullets.displayOrder)),
+    // Creation order, not alphabetical by category. An import inserts skills in
+    // the order the source resume listed them, so ordering by id reproduces
+    // "Languages, Frameworks, Databases, Tools" rather than sorting it into
+    // "Databases, Frameworks, Languages, Tools" — which is not what anyone wrote.
+    db.select().from(vaultSkills).orderBy(asc(vaultSkills.id)),
+    db.select().from(vaultSections).orderBy(asc(vaultSections.displayOrder)),
+  ]);
 
   const bulletsByEntry = new Map<number, typeof allBullets>();
   for (const b of allBullets) {
@@ -207,18 +177,14 @@ export function vaultOptionsForSection(resumeId: number, sectionId: number) {
 
   const entryIdToSectionId = new Map(entries.map((e) => [e.id, e.sectionId]));
 
-  // Creation order, not alphabetical by category. An import inserts skills in
-  // the order the source resume listed them, so ordering by id reproduces
-  // "Languages, Frameworks, Databases, Tools" rather than sorting it into
-  // "Databases, Frameworks, Languages, Tools" — which is not what anyone wrote.
-  const skills = db.select().from(vaultSkills).orderBy(asc(vaultSkills.id)).all();
+  const usedEntryIds = new Map<number, Set<number>>();
+  for (const id of sectionIds) usedEntryIds.set(id, new Set());
+  for (const e of resumeEntryRows) {
+    if (e.sourceEntryId !== null) usedEntryIds.get(e.sectionId)?.add(e.sourceEntryId);
+  }
 
   return {
-    sections: db
-      .select()
-      .from(vaultSections)
-      .orderBy(asc(vaultSections.displayOrder))
-      .all(),
+    sections,
     entries: entries.map((e) => ({ ...e, bullets: bulletsByEntry.get(e.id) ?? [] })),
     skills: skills.map((s) => ({
       ...s,

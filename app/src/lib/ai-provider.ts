@@ -23,34 +23,37 @@ import "server-only";
 
 export type AiProvider = "anthropic" | "gemini" | "ollama" | "none";
 
-/** Whichever provider has credentials, in order of output quality. */
-export function activeProvider(): AiProvider {
-  const forced = process.env.AI_PROVIDER?.trim().toLowerCase();
-  if (forced === "anthropic" || forced === "gemini" || forced === "ollama") {
-    return forced;
-  }
+/**
+ * Which provider to call and with what key — resolved per user by
+ * `getAiConfig()` in ai-config.ts, then passed into every call here.
+ *
+ * Nothing in this file reads a key from the environment. One deployment serves
+ * several people, each with their own key; an env key would silently bill one
+ * person for everyone's tuning runs.
+ */
+export type AiConfig = {
+  provider: AiProvider;
+  apiKey: string;
+  model: string;
+};
 
-  if (process.env.ANTHROPIC_API_KEY?.trim()) return "anthropic";
-  if (process.env.GEMINI_API_KEY?.trim()) return "gemini";
-  if (process.env.OLLAMA_BASE_URL?.trim()) return "ollama";
-  return "none";
-}
+export const NO_AI: AiConfig = { provider: "none", apiKey: "", model: "" };
 
-export function providerLabel(p: AiProvider = activeProvider()): string {
-  switch (p) {
+export function providerLabel(config: AiConfig): string {
+  switch (config.provider) {
     case "anthropic":
-      return `Claude (${process.env.ANTHROPIC_MODEL ?? "claude-sonnet-5"})`;
+      return `Claude (${config.model})`;
     case "gemini":
-      return `Gemini (${process.env.GEMINI_MODEL ?? "gemini-3.5-flash"})`;
+      return `Gemini (${config.model})`;
     case "ollama":
-      return `Ollama (${process.env.OLLAMA_MODEL ?? "llama3.1"})`;
+      return `Ollama (${config.model})`;
     default:
       return "None — using local parsing";
   }
 }
 
-export function aiAvailable(): boolean {
-  return activeProvider() !== "none";
+export function aiAvailable(config: AiConfig): boolean {
+  return config.provider !== "none";
 }
 
 export type StructuredRequest = {
@@ -73,8 +76,9 @@ export type StructuredRequest = {
  */
 export async function callStructured(
   req: StructuredRequest,
+  config: AiConfig,
 ): Promise<Record<string, unknown> | null> {
-  return (await callStructuredVerbose(req)).data;
+  return (await callStructuredVerbose(req, config)).data;
 }
 
 export type StructuredOutcome = {
@@ -94,18 +98,18 @@ export type StructuredOutcome = {
  */
 export async function callStructuredVerbose(
   req: StructuredRequest,
+  config: AiConfig,
 ): Promise<StructuredOutcome> {
-  const provider = activeProvider();
-  if (provider === "none") return { data: null, reason: "" };
+  if (config.provider === "none") return { data: null, reason: "" };
 
   try {
-    switch (provider) {
+    switch (config.provider) {
       case "anthropic":
-        return { data: await callAnthropic(req), reason: "" };
+        return { data: await callAnthropic(req, config), reason: "" };
       case "gemini":
-        return await callGeminiVerbose(req);
+        return await callGeminiVerbose(req, config);
       case "ollama":
-        return { data: await callOllama(req), reason: "" };
+        return { data: await callOllama(req, config), reason: "" };
       default:
         return { data: null, reason: "" };
     }
@@ -115,12 +119,12 @@ export async function callStructuredVerbose(
   }
 }
 
-async function callAnthropic(req: StructuredRequest) {
+async function callAnthropic(req: StructuredRequest, config: AiConfig) {
   const Anthropic = (await import("@anthropic-ai/sdk")).default;
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+  const client = new Anthropic({ apiKey: config.apiKey });
 
   const message = await client.messages.create({
-    model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-5",
+    model: config.model,
     max_tokens: req.maxTokens ?? 3000,
     tools: [
       {
@@ -146,15 +150,16 @@ async function callAnthropic(req: StructuredRequest) {
  * here stay to plain objects, arrays, strings, booleans and enums. Anything
  * exotic gets a 400, which surfaces as null and a deterministic fallback.
  */
-async function callGeminiVerbose(req: StructuredRequest): Promise<StructuredOutcome> {
-  const model = process.env.GEMINI_MODEL ?? "gemini-3.5-flash";
-  const key = process.env.GEMINI_API_KEY!;
-
+async function callGeminiVerbose(
+  req: StructuredRequest,
+  config: AiConfig,
+): Promise<StructuredOutcome> {
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      // Header rather than `?key=` — a key in the URL ends up in request logs.
+      headers: { "Content-Type": "application/json", "x-goog-api-key": config.apiKey },
       body: JSON.stringify({
         contents: [{ parts: [{ text: req.prompt }] }],
         generationConfig: {
@@ -215,9 +220,9 @@ async function callGeminiVerbose(req: StructuredRequest): Promise<StructuredOutc
  * the deterministic parser, which is why this is opt-in and why its output goes
  * through the same Zod validation as everything else.
  */
-async function callOllama(req: StructuredRequest) {
+async function callOllama(req: StructuredRequest, config: AiConfig) {
   const base = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
-  const model = process.env.OLLAMA_MODEL ?? "llama3.1";
+  const model = config.model;
 
   const response = await fetch(`${base}/api/generate`, {
     method: "POST",

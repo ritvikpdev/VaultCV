@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { asc, eq } from "drizzle-orm";
 
 import { db } from "@/db/client";
-import { bootstrap, getProfile } from "@/db/bootstrap";
+import { withVault } from "@/db/session";
+import { getAiConfig } from "@/db/ai-config";
+import { getProfile } from "@/db/bootstrap";
 import { findSectionByHeading } from "@/db/queries";
 import { profile, vaultBullets, vaultEntries, vaultSections } from "@/db/schema";
 import type { ParseSource } from "@/lib/import-parse";
@@ -18,8 +20,7 @@ import { findSimilar } from "@/lib/similarity";
 import { createBullet, createEntry, createSection } from "../actions";
 
 export type ActionResult<T = undefined> =
-  | ({ ok: true } & (T extends undefined ? object : { data: T }))
-  | { ok: false; error: string };
+  ({ ok: true } & (T extends undefined ? object : { data: T })) | { ok: false; error: string };
 
 function fail(error: string): { ok: false; error: string } {
   return { ok: false, error };
@@ -62,19 +63,21 @@ export type AnnotatedImport = {
  * of empty sections. Where a heading or an entry already exists it merges into
  * it, so importing a second resume enriches the vault rather than duplicating it.
  */
-function annotate(parsed: ParsedImport): AnnotatedImport["entries"] {
-  const existingBulletText = db
+async function annotate(parsed: ParsedImport): Promise<AnnotatedImport["entries"]> {
+  const existingBulletText = await db
     .select({ text: vaultBullets.text, entryId: vaultBullets.entryId })
     .from(vaultBullets)
-    .where(eq(vaultBullets.isActive, true))
-    .all();
+    .where(eq(vaultBullets.isActive, true));
 
-  const allEntries = db.select().from(vaultEntries).all();
+  const allEntries = await db.select().from(vaultEntries);
+  const allSections = await db.select().from(vaultSections);
   const seenInBatch: string[] = [];
 
   return parsed.entries.map((entry) => {
     const heading = entry.sectionHeading?.trim() || "Other";
-    const section = findSectionByHeading(heading);
+    // Same rule as findSectionByHeading, against rows already loaded.
+    const section =
+      allSections.find((s) => s.heading.trim().toLowerCase() === heading.toLowerCase()) ?? null;
 
     // Same title and employer inside the same section is the same thing.
     const existingEntry = section
@@ -93,8 +96,7 @@ function annotate(parsed: ParsedImport): AnnotatedImport["entries"] {
       : existingBulletText.map((b) => b.text);
 
     const bullets = entry.bullets.map((b) => {
-      const duplicateOf =
-        findSimilar(b.text, compareAgainst) ?? findSimilar(b.text, seenInBatch);
+      const duplicateOf = findSimilar(b.text, compareAgainst) ?? findSimilar(b.text, seenInBatch);
       seenInBatch.push(b.text);
       return duplicateOf ? { text: b.text, possibleDuplicateOf: duplicateOf } : { text: b.text };
     });
@@ -110,46 +112,44 @@ function annotate(parsed: ParsedImport): AnnotatedImport["entries"] {
   });
 }
 
-export async function parseImportInput(
-  formData: FormData,
-): Promise<ActionResult<AnnotatedImport>> {
-  bootstrap();
+export async function parseImportInput(formData: FormData): Promise<ActionResult<AnnotatedImport>> {
+  // Reading the PDF and asking a model happen outside any vault scope — each
+  // scope holds an open transaction, and structuring a long resume can take a
+  // minute. Only the final comparison against the vault needs one.
+  const ai = await withVault(() => getAiConfig());
 
-  const file = formData.get("file");
-  const pastedText = String(formData.get("text") ?? "").trim();
+  {
+    const file = formData.get("file");
+    const pastedText = String(formData.get("text") ?? "").trim();
 
-  let text: string;
-  let gluedSamples: string[] = [];
+    let text: string;
+    let gluedSamples: string[] = [];
 
-  try {
-    if (file instanceof File && file.size > 0) {
-      const extracted = await extractPdfText(Buffer.from(await file.arrayBuffer()));
-      text = extracted.text;
-      gluedSamples = extracted.gluedSamples;
-    } else {
-      text = pastedText;
+    try {
+      if (file instanceof File && file.size > 0) {
+        const extracted = await extractPdfText(Buffer.from(await file.arrayBuffer()));
+        text = extracted.text;
+        gluedSamples = extracted.gluedSamples;
+      } else {
+        text = pastedText;
+      }
+    } catch (err) {
+      if (err instanceof EmptyPdfTextError) return fail(err.message);
+      return fail("Could not read that PDF. Try pasting the text instead.");
     }
-  } catch (err) {
-    if (err instanceof EmptyPdfTextError) return fail(err.message);
-    return fail("Could not read that PDF. Try pasting the text instead.");
+
+    if (!text || text.replace(/\s+/g, "").length < 20) {
+      return fail("Paste some resume text or choose a PDF file first.");
+    }
+
+    const { result, source, fallbackReason } = await parseResumeText(text, ai);
+    const entries = await withVault(() => annotate(result));
+
+    return {
+      ok: true,
+      data: { profile: result.profile, entries, source, gluedSamples, fallbackReason },
+    };
   }
-
-  if (!text || text.replace(/\s+/g, "").length < 20) {
-    return fail("Paste some resume text or choose a PDF file first.");
-  }
-
-  const { result, source, fallbackReason } = await parseResumeText(text);
-
-  return {
-    ok: true,
-    data: {
-      profile: result.profile,
-      entries: annotate(result),
-      source,
-      gluedSamples,
-      fallbackReason,
-    },
-  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -181,10 +181,10 @@ export type ReviewedImportInput = {
   entries: ReviewedEntryInput[];
 };
 
-function applyProfileAction(action: ProfileImportAction, parsed: ParsedProfile | undefined) {
+async function applyProfileAction(action: ProfileImportAction, parsed: ParsedProfile | undefined) {
   if (action === "skip" || !parsed) return;
 
-  const current = getProfile();
+  const current = await getProfile();
   const parsedLinks = (parsed.links ?? []).filter((l) => l.label && l.url);
 
   const next =
@@ -212,98 +212,95 @@ function applyProfileAction(action: ProfileImportAction, parsed: ParsedProfile |
   const validated = profileSchema.safeParse(next);
   if (!validated.success) return;
 
-  db.update(profile)
+  await db
+    .update(profile)
     .set({ ...validated.data, updatedAt: Math.floor(Date.now() / 1000) })
-    .where(eq(profile.id, current.id))
-    .run();
+    .where(eq(profile.id, current.id));
 }
 
 export async function saveReviewedImport(
   reviewed: ReviewedImportInput,
 ): Promise<ActionResult<{ sections: number; entries: number; bullets: number; merged: number }>> {
-  bootstrap();
+  return withVault(async () => {
+    await applyProfileAction(reviewed.profileAction, reviewed.profile);
 
-  applyProfileAction(reviewed.profileAction, reviewed.profile);
+    let sectionsCreated = 0;
+    let entriesCreated = 0;
+    let bulletsCreated = 0;
+    let merged = 0;
 
-  let sectionsCreated = 0;
-  let entriesCreated = 0;
-  let bulletsCreated = 0;
-  let merged = 0;
+    // Sections created during this run, so two entries under the same new
+    // heading land in one section rather than creating it twice.
+    const sectionCache = new Map<string, number>();
 
-  // Sections created during this run, so two entries under the same new
-  // heading land in one section rather than creating it twice.
-  const sectionCache = new Map<string, number>();
+    for (const entry of reviewed.entries) {
+      if (!entry.checked) continue;
 
-  for (const entry of reviewed.entries) {
-    if (!entry.checked) continue;
+      const key = normalizeTerm(entry.sectionHeading);
+      let sectionId = entry.existingSectionId ?? sectionCache.get(key) ?? null;
 
-    const key = normalizeTerm(entry.sectionHeading);
-    let sectionId = entry.existingSectionId ?? sectionCache.get(key) ?? null;
+      if (!sectionId) {
+        const existing = await findSectionByHeading(entry.sectionHeading);
+        if (existing) {
+          sectionId = existing.id;
+        } else {
+          const created = await createSection({
+            heading: entry.sectionHeading,
+            type: entry.sectionType,
+          });
+          if (!created.ok) continue;
+          sectionId = created.data;
+          sectionsCreated += 1;
+        }
+        sectionCache.set(key, sectionId);
+      }
 
-    if (!sectionId) {
-      const existing = findSectionByHeading(entry.sectionHeading);
-      if (existing) {
-        sectionId = existing.id;
+      // Merge into an existing entry, or create one.
+      let entryId = entry.existingEntryId;
+
+      if (entryId) {
+        merged += 1;
       } else {
-        const created = await createSection({
-          heading: entry.sectionHeading,
-          type: entry.sectionType,
+        const created = await createEntry(sectionId, {
+          title: entry.title,
+          organization: entry.organization,
+          subtitle: entry.subtitle,
+          location: entry.location,
+          startDate: entry.startDate,
+          endDate: entry.isCurrent ? "" : entry.endDate,
+          isCurrent: entry.isCurrent,
+          information: entry.information,
         });
         if (!created.ok) continue;
-        sectionId = created.data;
-        sectionsCreated += 1;
+        entryId = created.data;
+        entriesCreated += 1;
       }
-      sectionCache.set(key, sectionId);
+
+      for (const bullet of entry.bullets) {
+        if (!bullet.checked) continue;
+        const result = await createBullet(entryId, bullet.text);
+        if (result.ok) bulletsCreated += 1;
+      }
     }
 
-    // Merge into an existing entry, or create one.
-    let entryId = entry.existingEntryId;
+    revalidatePath("/vault");
+    revalidatePath("/");
 
-    if (entryId) {
-      merged += 1;
-    } else {
-      const created = await createEntry(sectionId, {
-        title: entry.title,
-        organization: entry.organization,
-        subtitle: entry.subtitle,
-        location: entry.location,
-        startDate: entry.startDate,
-        endDate: entry.isCurrent ? "" : entry.endDate,
-        isCurrent: entry.isCurrent,
-        information: entry.information,
-      });
-      if (!created.ok) continue;
-      entryId = created.data;
-      entriesCreated += 1;
-    }
-
-    for (const bullet of entry.bullets) {
-      if (!bullet.checked) continue;
-      const result = await createBullet(entryId, bullet.text);
-      if (result.ok) bulletsCreated += 1;
-    }
-  }
-
-  revalidatePath("/vault");
-  revalidatePath("/");
-
-  return {
-    ok: true,
-    data: {
-      sections: sectionsCreated,
-      entries: entriesCreated,
-      bullets: bulletsCreated,
-      merged,
-    },
-  };
+    return {
+      ok: true,
+      data: {
+        sections: sectionsCreated,
+        entries: entriesCreated,
+        bullets: bulletsCreated,
+        merged,
+      },
+    };
+  });
 }
 
 /** Existing vault sections, for the review screen's section dropdown. */
 export async function existingSections() {
-  bootstrap();
-  return db
-    .select()
-    .from(vaultSections)
-    .orderBy(asc(vaultSections.displayOrder))
-    .all();
+  return withVault(async () => {
+    return await db.select().from(vaultSections).orderBy(asc(vaultSections.displayOrder));
+  });
 }

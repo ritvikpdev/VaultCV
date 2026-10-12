@@ -4,8 +4,8 @@ import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 
-import { db } from "@/db/client";
-import { bootstrap } from "@/db/bootstrap";
+import { db, first } from "@/db/client";
+import { withVault } from "@/db/session";
 import { resumeSections, resumes, resumeStyles } from "@/db/schema";
 import {
   clampStyleValue,
@@ -70,45 +70,42 @@ export async function updateResumeStyle(
   resumeId: number,
   patch: StylePatch,
 ): Promise<ActionResult> {
-  bootstrap();
+  return withVault(async () => {
+    const parsed = stylePatchSchema.safeParse(patch);
+    if (!parsed.success) return fail(parsed.error.issues[0]!.message);
 
-  const parsed = stylePatchSchema.safeParse(patch);
-  if (!parsed.success) return fail(parsed.error.issues[0]!.message);
+    const resume = await first(db.select().from(resumes).where(eq(resumes.id, resumeId)));
+    if (!resume) return fail("Resume not found");
 
-  const resume = db.select().from(resumes).where(eq(resumes.id, resumeId)).get();
-  if (!resume) return fail("Resume not found");
+    const clamped: Record<string, unknown> = { ...parsed.data };
+    for (const key of NUMERIC_KEYS) {
+      const value = parsed.data[key];
+      if (typeof value === "number") clamped[key] = clampStyleValue(key, value);
+    }
 
-  const clamped: Record<string, unknown> = { ...parsed.data };
-  for (const key of NUMERIC_KEYS) {
-    const value = parsed.data[key];
-    if (typeof value === "number") clamped[key] = clampStyleValue(key, value);
-  }
+    if (Object.keys(clamped).length === 0) return { ok: true };
 
-  if (Object.keys(clamped).length === 0) return { ok: true };
+    await db.update(resumeStyles).set(clamped).where(eq(resumeStyles.id, resume.styleId));
+    await db
+      .update(resumes)
+      .set({ updatedAt: Math.floor(Date.now() / 1000) })
+      .where(eq(resumes.id, resumeId));
 
-  db.update(resumeStyles).set(clamped).where(eq(resumeStyles.id, resume.styleId)).run();
-  db.update(resumes)
-    .set({ updatedAt: Math.floor(Date.now() / 1000) })
-    .where(eq(resumes.id, resumeId))
-    .run();
-
-  revalidatePath(`/resume/${resumeId}`);
-  return { ok: true };
+    revalidatePath(`/resume/${resumeId}`);
+    return { ok: true };
+  });
 }
 
 export async function resetResumeStyle(resumeId: number): Promise<ActionResult> {
-  bootstrap();
+  return withVault(async () => {
+    const resume = await first(db.select().from(resumes).where(eq(resumes.id, resumeId)));
+    if (!resume) return fail("Resume not found");
 
-  const resume = db.select().from(resumes).where(eq(resumes.id, resumeId)).get();
-  if (!resume) return fail("Resume not found");
+    await db.update(resumeStyles).set(DEFAULT_STYLE).where(eq(resumeStyles.id, resume.styleId));
 
-  db.update(resumeStyles)
-    .set(DEFAULT_STYLE)
-    .where(eq(resumeStyles.id, resume.styleId))
-    .run();
-
-  revalidatePath(`/resume/${resumeId}`);
-  return { ok: true };
+    revalidatePath(`/resume/${resumeId}`);
+    return { ok: true };
+  });
 }
 
 /** Insert a hard page break after a section, or clear it. */
@@ -116,39 +113,35 @@ export async function setSectionPageBreak(
   sectionId: number,
   value: boolean,
 ): Promise<ActionResult> {
-  bootstrap();
+  return withVault(async () => {
+    const section = await first(
+      db.select().from(resumeSections).where(eq(resumeSections.id, sectionId)),
+    );
+    if (!section) return fail("Section not found");
 
-  const section = db
-    .select()
-    .from(resumeSections)
-    .where(eq(resumeSections.id, sectionId))
-    .get();
-  if (!section) return fail("Section not found");
+    await db
+      .update(resumeSections)
+      .set({ pageBreakAfter: value })
+      .where(eq(resumeSections.id, sectionId));
 
-  db.update(resumeSections)
-    .set({ pageBreakAfter: value })
-    .where(eq(resumeSections.id, sectionId))
-    .run();
-
-  revalidatePath(`/resume/${section.resumeId}`);
-  return { ok: true };
+    revalidatePath(`/resume/${section.resumeId}`);
+    return { ok: true };
+  });
 }
 
 export async function toggleSectionVisible(sectionId: number): Promise<ActionResult> {
-  bootstrap();
+  return withVault(async () => {
+    const section = await first(
+      db.select().from(resumeSections).where(eq(resumeSections.id, sectionId)),
+    );
+    if (!section) return fail("Section not found");
 
-  const section = db
-    .select()
-    .from(resumeSections)
-    .where(eq(resumeSections.id, sectionId))
-    .get();
-  if (!section) return fail("Section not found");
+    await db
+      .update(resumeSections)
+      .set({ isVisible: !section.isVisible })
+      .where(eq(resumeSections.id, sectionId));
 
-  db.update(resumeSections)
-    .set({ isVisible: !section.isVisible })
-    .where(eq(resumeSections.id, sectionId))
-    .run();
-
-  revalidatePath(`/resume/${section.resumeId}`);
-  return { ok: true };
+    revalidatePath(`/resume/${section.resumeId}`);
+    return { ok: true };
+  });
 }

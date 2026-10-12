@@ -1,11 +1,11 @@
 import "server-only";
 
-import { asc, eq } from "drizzle-orm";
+import { asc } from "drizzle-orm";
 
 import { orderedBlocks } from "../lib/reorder";
 
 import { db } from "./client";
-import { bootstrap, getSetting, SETTING_KEYS } from "./bootstrap";
+import { getSetting, SETTING_KEYS } from "./bootstrap";
 import {
   vaultBullets,
   vaultEntries,
@@ -25,32 +25,20 @@ export type SectionWithEntries = VaultSection & { entries: EntryWithBullets[] };
 /**
  * Every section, in order, with entries and bullets attached.
  *
- * A handful of small reads from local SQLite grouped in memory, rather than a
- * join with row duplication. At vault scale the difference is unmeasurable and
- * this stays readable.
+ * Three whole-table reads grouped in memory, rather than a join with row
+ * duplication. "Whole table" means the current user's rows only — row-level
+ * security filters before anything leaves Postgres. At vault scale the
+ * difference from a join is unmeasurable and this stays readable.
  */
-export function allSections(): SectionWithEntries[] {
-  bootstrap();
-
-  const sections = db
-    .select()
-    .from(vaultSections)
-    .orderBy(asc(vaultSections.displayOrder))
-    .all();
+export async function allSections(): Promise<SectionWithEntries[]> {
+  const sections = await db.select().from(vaultSections).orderBy(asc(vaultSections.displayOrder));
 
   if (sections.length === 0) return [];
 
-  const entries = db
-    .select()
-    .from(vaultEntries)
-    .orderBy(asc(vaultEntries.displayOrder))
-    .all();
-
-  const bullets = db
-    .select()
-    .from(vaultBullets)
-    .orderBy(asc(vaultBullets.displayOrder))
-    .all();
+  const [entries, bullets] = await Promise.all([
+    db.select().from(vaultEntries).orderBy(asc(vaultEntries.displayOrder)),
+    db.select().from(vaultBullets).orderBy(asc(vaultBullets.displayOrder)),
+  ]);
 
   const bulletsByEntry = new Map<number, VaultBullet[]>();
   for (const b of bullets) {
@@ -71,13 +59,8 @@ export function allSections(): SectionWithEntries[] {
   return sections.map((s) => ({ ...s, entries: entriesBySection.get(s.id) ?? [] }));
 }
 
-export function getSection(id: number): SectionWithEntries | null {
-  return allSections().find((s) => s.id === id) ?? null;
-}
-
-export function allGroups(): VaultGroup[] {
-  bootstrap();
-  return db.select().from(vaultGroups).orderBy(asc(vaultGroups.displayOrder)).all();
+export async function allGroups(): Promise<VaultGroup[]> {
+  return db.select().from(vaultGroups).orderBy(asc(vaultGroups.displayOrder));
 }
 
 /** One top-level block of the vault sidebar. A null group is the ungrouped block. */
@@ -91,12 +74,13 @@ export type VaultBlock = { group: VaultGroup | null; sections: SectionWithEntrie
  * `display_order`. That reconciliation lives here so the sidebar, the reorder
  * action and any future consumer can't each interpret it slightly differently.
  */
-export function vaultBlocks(): VaultBlock[] {
-  bootstrap();
-
-  const groups = allGroups();
-  const sections = allSections();
-  const ungroupedOrder = Number(getSetting(SETTING_KEYS.ungroupedOrder) ?? -1);
+export async function vaultBlocks(): Promise<VaultBlock[]> {
+  const [groups, sections, ungroupedSetting] = await Promise.all([
+    allGroups(),
+    allSections(),
+    getSetting(SETTING_KEYS.ungroupedOrder),
+  ]);
+  const ungroupedOrder = Number(ungroupedSetting ?? -1);
 
   return orderedBlocks(groups, Number.isFinite(ungroupedOrder) ? ungroupedOrder : -1).map(
     (key) => ({
@@ -110,9 +94,8 @@ export function vaultBlocks(): VaultBlock[] {
  * The derived skill index. Read by the tuner; never edited directly.
  * Ordered by id so it reflects the order skills were written in.
  */
-export function allSkills(): VaultSkill[] {
-  bootstrap();
-  return db.select().from(vaultSkills).orderBy(asc(vaultSkills.id)).all();
+export async function allSkills(): Promise<VaultSkill[]> {
+  return db.select().from(vaultSkills).orderBy(asc(vaultSkills.id));
 }
 
 export type SearchHit = {
@@ -129,11 +112,11 @@ export type SearchHit = {
  * Deliberately not fuzzy — when you're hunting a bullet you half-remember,
  * exact substring is more predictable than a ranked guess.
  */
-export function searchVault(query: string): SearchHit[] {
+export async function searchVault(query: string): Promise<SearchHit[]> {
   const q = query.trim().toLowerCase();
   if (!q) return [];
 
-  const sections = allSections();
+  const sections = await allSections();
   const hits: SearchHit[] = [];
 
   for (const section of sections) {
@@ -145,9 +128,7 @@ export function searchVault(query: string): SearchHit[] {
         entry.information.toLowerCase().includes(q);
 
       const matchedBullets = entry.bullets.filter(
-        (b) =>
-          b.text.toLowerCase().includes(q) ||
-          b.tags.some((t) => t.toLowerCase().includes(q)),
+        (b) => b.text.toLowerCase().includes(q) || b.tags.some((t) => t.toLowerCase().includes(q)),
       );
 
       if (matchedHeader || matchedBullets.length > 0) {
@@ -165,12 +146,8 @@ export function searchVault(query: string): SearchHit[] {
 }
 
 /** Entry counts per section, for the sidebar badges. */
-export function entryCountsBySection(): Record<number, number> {
-  bootstrap();
-  const rows = db
-    .select({ sectionId: vaultEntries.sectionId })
-    .from(vaultEntries)
-    .all();
+export async function entryCountsBySection(): Promise<Record<number, number>> {
+  const rows = await db.select({ sectionId: vaultEntries.sectionId }).from(vaultEntries);
 
   const out: Record<number, number> = {};
   for (const r of rows) out[r.sectionId] = (out[r.sectionId] ?? 0) + 1;
@@ -178,14 +155,11 @@ export function entryCountsBySection(): Record<number, number> {
 }
 
 /** Look up a section by heading, case-insensitively. Used by import merging. */
-export function findSectionByHeading(heading: string): VaultSection | null {
-  bootstrap();
+export async function findSectionByHeading(heading: string): Promise<VaultSection | null> {
   const target = heading.trim().toLowerCase();
   return (
-    db
-      .select()
-      .from(vaultSections)
-      .all()
-      .find((s) => s.heading.trim().toLowerCase() === target) ?? null
+    (await db.select().from(vaultSections)).find(
+      (s) => s.heading.trim().toLowerCase() === target,
+    ) ?? null
   );
 }
