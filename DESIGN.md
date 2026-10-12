@@ -317,7 +317,12 @@ Everything below is built and working.
   organisation, bullets) versus `skill` (a label plus sub-skills).
 - **Entries and bullets** with dates, organisation, location, subtitle, and
   per-section extra fields. Bullets can be pinned so the tuner always favours
-  them.
+  them. A section shows its entries as a grid of tiles; opening one slides in a
+  panel where every field edits in place and saves itself — no forms, no Save
+  button. Skill lines edit as chips.
+- **An overview** as the vault's front page: totals, a bullet-strength
+  breakdown, a "needs attention" list (empty entries, weak bullets, missing
+  dates) linking straight to each item, and every skill in one cloud.
 - **Bullet strength scoring** — action verbs, quantification, length, passive
   voice — computed locally with no AI, shown as a five-segment meter with the
   specific reasons it scored that way.
@@ -329,8 +334,7 @@ Everything below is built and working.
 - **Move an entry to another section** through a picker, with a type guard that
   refuses `normal`↔`skill` moves in the server action as well as the UI.
 - **Drag to reorder** groups, sections, entries and bullets. Sections can be
-  dragged between groups to file them. Chevrons collapse entries; they never
-  move anything.
+  dragged between groups to file them.
 
 ### Import
 

@@ -1,43 +1,26 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
-import {
-  ChevronDown,
-  ChevronRight,
-  FolderInput,
-  GripVertical,
-  Pencil,
-  Pin,
-  Plus,
-  Trash2,
-} from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { CornerDownLeft, GripVertical, Pin, Trash2 } from "lucide-react";
 
 import { ConfirmButton, StrengthMeter } from "@/components/ui";
-import type { EntryWithBullets } from "@/db/queries";
-import type { VaultBullet, VaultSection } from "@/db/schema";
-import { scoreBullet, STRENGTH_LABELS } from "@/lib/bullet-strength";
-import { extractSkills } from "@/lib/skill-index";
+import type { VaultBullet } from "@/db/schema";
+import { scoreBullet, STRENGTH_COLORS, STRENGTH_LABELS } from "@/lib/bullet-strength";
 import { useSortable, type SortableHandleProps } from "@/lib/use-sortable";
 import { cn } from "@/lib/utils";
 
-import {
-  createBullet,
-  deleteBullet,
-  deleteEntry,
-  reorderBullets,
-  toggleBulletPin,
-  updateBullet,
-} from "./actions";
-import { EntryDialog } from "./entry-dialog";
-import { MoveEntryDialog, type MoveTargetGroup } from "./move-entry-dialog";
+import { createBullet, deleteBullet, reorderBullets, toggleBulletPin, updateBullet } from "./actions";
 
-function dateRange(entry: EntryWithBullets): string {
-  if (!entry.startDate && !entry.endDate && !entry.isCurrent) return "";
-  const end = entry.isCurrent ? "Present" : entry.endDate;
-  return [entry.startDate, end].filter(Boolean).join(" – ");
-}
+/**
+ * An entry's bullets, as editable fact cards.
+ *
+ * Shown inside the entry panel. Each bullet is a card rather than a dotted
+ * line on purpose: the vault holds facts to draw from, and a resume-styled
+ * list made it read as a resume being written rather than a record being kept.
+ */
 
-function StrengthHint({ text }: { text: string }) {
+/** Live writing-quality feedback while typing. Not job relevance — see bullet-strength.ts. */
+export function StrengthHint({ text }: { text: string }) {
   const { score, reasons } = scoreBullet(text);
   const missing = reasons.filter((r) => r.delta > 0 && !r.met);
   const penalties = reasons.filter((r) => r.delta < 0 && r.met);
@@ -62,6 +45,20 @@ function StrengthHint({ text }: { text: string }) {
   );
 }
 
+/** A textarea that grows with its content, so a long bullet never scrolls inside a box. */
+function AutoTextarea(
+  props: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { value: string },
+) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [props.value]);
+  return <textarea ref={ref} rows={1} {...props} />;
+}
+
 function BulletRow({
   bullet,
   dragging,
@@ -75,380 +72,231 @@ function BulletRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(bullet.text);
+  const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
+  // Adopt the saved text when the server's copy changes, unless mid-edit.
+  // Keyed on the text alone: re-running when `editing` flips would snap the
+  // card back to the old text in the moment between Save and revalidation.
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  useEffect(() => {
+    if (!editingRef.current) setDraft(bullet.text);
+  }, [bullet.text]);
+
   function save() {
-    if (!draft.trim()) return;
+    const next = draft.trim();
+    setEditing(false);
+    // Clearing a bullet is not how you delete one — deletes confirm. Put it back.
+    if (!next) {
+      setDraft(bullet.text);
+      return;
+    }
+    if (next === bullet.text) return;
+
     startTransition(async () => {
-      await updateBullet(bullet.id, draft);
-      setEditing(false);
+      const result = await updateBullet(bullet.id, next, bullet.tags);
+      if (!result.ok) {
+        setError(result.error);
+        setDraft(bullet.text);
+      } else {
+        setError(null);
+      }
     });
   }
 
-  if (editing) {
-    return (
-      <li className="rounded-lg bg-canvas p-3">
-        <textarea
-          className="field min-h-20 resize-y bg-surface"
-          value={draft}
-          autoFocus
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              setDraft(bullet.text);
-              setEditing(false);
-            }
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) save();
-          }}
-        />
-        <StrengthHint text={draft} />
-        <div className="mt-2 flex gap-2">
-          <button className="btn-accent px-3 py-1 text-xs" onClick={save}>
-            Save
-          </button>
-          <button
-            className="btn-ghost px-3 py-1 text-xs"
-            onClick={() => {
-              setDraft(bullet.text);
-              setEditing(false);
-            }}
-          >
-            Cancel
-          </button>
-        </div>
-      </li>
-    );
-  }
+  const strength = Math.max(1, Math.min(5, bullet.strength));
 
   return (
     <li
       ref={register}
       className={cn(
-        "group flex items-start gap-1 rounded-lg py-1.5 pr-2 transition-opacity hover:bg-canvas",
+        "group relative flex items-start gap-1.5 overflow-hidden rounded-lg border bg-surface py-2.5 pl-3 pr-2 transition-all",
+        editing ? "border-accent shadow-lift" : "border-line hover:shadow-lift",
         dragging && "opacity-40",
       )}
     >
+      {/* Strength edge. The meter and its tooltip carry the same fact in words. */}
+      <span
+        aria-hidden
+        className={cn("absolute inset-y-0 left-0 w-1", STRENGTH_COLORS[strength - 1])}
+      />
+
       <span
         {...handle}
         className="mt-0.5 shrink-0 text-muted opacity-0 transition-opacity hover:text-ink group-hover:opacity-100"
         title="Drag to reorder"
       >
-        <GripVertical size={12} />
+        <GripVertical size={13} />
       </span>
 
-      <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-ink" />
-      <span className="flex-1 pl-1 text-sm leading-relaxed">{bullet.text}</span>
+      <div className="min-w-0 flex-1">
+        {editing ? (
+          <>
+            <AutoTextarea
+              className="w-full resize-none bg-transparent text-sm leading-relaxed outline-none"
+              value={draft}
+              autoFocus
+              onFocus={(e) => {
+                const end = e.currentTarget.value.length;
+                e.currentTarget.setSelectionRange(end, end);
+              }}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={save}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setDraft(bullet.text);
+                  setEditing(false);
+                }
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                }
+              }}
+            />
+            <StrengthHint text={draft} />
+            <p className="mt-1 text-[11px] text-muted">
+              Saves when you click away · Enter to finish · Esc to undo
+            </p>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="block w-full cursor-text text-left text-sm leading-relaxed"
+            title="Click to edit"
+            onClick={() => setEditing(true)}
+          >
+            {draft}
+          </button>
+        )}
+        {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+      </div>
 
-      <span className="mt-1 shrink-0">
-        <StrengthMeter
-          score={bullet.strength}
-          title={`${STRENGTH_LABELS[bullet.strength]} — writing quality, not job relevance`}
-        />
-      </span>
-
-      <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-        <button
-          className={cn(
-            "rounded p-1 hover:bg-line",
-            bullet.isPinned ? "text-accent" : "text-muted",
-          )}
-          title={bullet.isPinned ? "Unpin" : "Pin — auto-selected when tuning"}
-          onClick={() => startTransition(() => void toggleBulletPin(bullet.id))}
-        >
-          <Pin size={13} fill={bullet.isPinned ? "currentColor" : "none"} />
-        </button>
-        <button
-          className="rounded p-1 text-muted hover:bg-line"
-          title="Edit"
-          onClick={() => setEditing(true)}
-        >
-          <Pencil size={13} />
-        </button>
-        <ConfirmButton
-          className="rounded p-1 text-muted hover:bg-line hover:text-red-600"
-          title="Delete bullet"
-          message="Delete this bullet? Any resume that copied it keeps its copy."
-          onConfirm={() => startTransition(() => void deleteBullet(bullet.id))}
-        >
-          <Trash2 size={13} />
-        </ConfirmButton>
-      </span>
-
-      {bullet.isPinned && (
-        <span className="mt-0.5 shrink-0 rounded bg-accentSoft px-1.5 py-0.5 text-[10px] font-medium text-accent group-hover:hidden">
-          Pinned
+      {!editing && (
+        <span className="flex shrink-0 items-center gap-0.5">
+          <span className="mr-1 hidden sm:inline-flex">
+            <StrengthMeter
+              score={strength}
+              title={`${STRENGTH_LABELS[strength]} — writing quality, not job relevance`}
+            />
+          </span>
+          <button
+            className={cn(
+              "rounded p-1 transition-colors hover:bg-canvas",
+              bullet.isPinned ? "text-accent" : "text-muted/50 hover:text-ink",
+            )}
+            title={bullet.isPinned ? "Pinned — click to unpin" : "Pin — auto-selected when tuning"}
+            aria-pressed={bullet.isPinned}
+            onClick={() => startTransition(() => void toggleBulletPin(bullet.id))}
+          >
+            <Pin size={13} fill={bullet.isPinned ? "currentColor" : "none"} />
+          </button>
+          <ConfirmButton
+            className="rounded p-1 text-muted/50 transition-colors hover:bg-canvas hover:text-red-600"
+            title="Delete bullet"
+            message="Delete this bullet? Any resume that copied it keeps its copy."
+            onConfirm={() => startTransition(() => void deleteBullet(bullet.id))}
+          >
+            <Trash2 size={13} />
+          </ConfirmButton>
         </span>
       )}
     </li>
   );
 }
 
-export function EntryCard({
-  entry,
-  section,
-  moveTargets,
-  collapsed,
-  onToggle,
-  dragging,
-  register,
-  handle,
-}: {
-  entry: EntryWithBullets;
-  section: VaultSection;
-  /** Sections of the same kind, minus this one. Empty means nowhere to move to. */
-  moveTargets: MoveTargetGroup[];
-  collapsed: boolean;
-  onToggle: () => void;
-  dragging: boolean;
-  register: (el: HTMLElement | null) => void;
-  handle: SortableHandleProps;
-}) {
-  const [editOpen, setEditOpen] = useState(false);
-  const [moveOpen, setMoveOpen] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [newBullet, setNewBullet] = useState("");
+/** Always-open box at the foot of the list. Enter adds and keeps focus for the next one. */
+function BulletComposer({ entryId, first }: { entryId: number; first: boolean }) {
+  const [text, setText] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  const canMove = moveTargets.some((g) => g.sections.length > 0);
+  function add() {
+    const next = text.trim();
+    if (!next || pending) return;
+    startTransition(async () => {
+      const result = await createBullet(entryId, next);
+      if (result.ok) {
+        setText("");
+        setError(null);
+      } else {
+        setError(result.error);
+      }
+    });
+  }
 
-  const isSkill = section.type === "skill";
-  const range = dateRange(entry);
-  const skills = useMemo(
-    () => (isSkill ? extractSkills(entry.information) : []),
-    [isSkill, entry.information],
+  return (
+    <div className="rounded-lg border border-dashed border-line bg-canvas/60 p-3 transition-colors focus-within:border-accent focus-within:bg-surface">
+      <AutoTextarea
+        className="w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-muted/70"
+        placeholder={
+          first
+            ? "Add your first achievement — start with a verb, include a number…"
+            : "Add another achievement…"
+        }
+        aria-label="New bullet"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && text) {
+            e.stopPropagation();
+            setText("");
+          }
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            add();
+          }
+        }}
+      />
+      <StrengthHint text={text} />
+      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+      {text.trim() && (
+        <div className="mt-2 flex items-center justify-end gap-2">
+          <span className="text-[11px] text-muted">Shift+Enter for a new line</span>
+          <button className="btn-accent px-3 py-1 text-xs" disabled={pending} onClick={add}>
+            <CornerDownLeft size={12} /> {pending ? "Adding…" : "Add"}
+          </button>
+        </div>
+      )}
+    </div>
   );
+}
 
-  const bulletById = useMemo(
-    () => new Map(entry.bullets.map((b) => [b.id, b])),
-    [entry.bullets],
-  );
+export function BulletList({ entryId, bullets }: { entryId: number; bullets: VaultBullet[] }) {
+  const [, startTransition] = useTransition();
 
-  const bulletOrder = useMemo(
-    () => ({ bullets: entry.bullets.map((b) => b.id) }),
-    [entry.bullets],
-  );
+  const bulletById = useMemo(() => new Map(bullets.map((b) => [b.id, b])), [bullets]);
+  const bulletOrder = useMemo(() => ({ bullets: bullets.map((b) => b.id) }), [bullets]);
 
   const sort = useSortable({
     value: bulletOrder,
     onCommit: (next) =>
       startTransition(() => {
-        void reorderBullets(entry.id, next.bullets ?? []);
+        void reorderBullets(entryId, next.bullets ?? []);
       }),
   });
 
-  const bullets = (sort.order.bullets ?? [])
+  const ordered = (sort.order.bullets ?? [])
     .map((id) => bulletById.get(id))
     .filter((b): b is VaultBullet => Boolean(b));
 
-  function addBullet() {
-    if (!newBullet.trim()) return;
-    startTransition(async () => {
-      await createBullet(entry.id, newBullet);
-      setNewBullet("");
-    });
-  }
-
-  // What the card says when it's shut: enough to identify it without opening.
-  const summary = isSkill
-    ? skills.length === 1
-      ? "1 skill"
-      : `${skills.length} skills`
-    : entry.bullets.length === 1
-      ? "1 bullet"
-      : `${entry.bullets.length} bullets`;
-
   return (
-    <>
-      <div
-        ref={register}
-        className={cn("card p-5 transition-opacity", dragging && "opacity-40")}
-      >
-        <div className="group/e flex items-start gap-2">
-          <span
-            {...handle}
-            className="mt-1 shrink-0 text-muted opacity-0 transition-opacity hover:text-ink group-hover/e:opacity-100"
-            title="Drag to reorder"
-          >
-            <GripVertical size={14} />
-          </span>
-
-          <button
-            className="mt-0.5 shrink-0 rounded p-0.5 text-muted hover:bg-canvas hover:text-ink"
-            title={collapsed ? "Expand" : "Collapse"}
-            aria-expanded={!collapsed}
-            onClick={onToggle}
-          >
-            {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-          </button>
-
-          <div className="min-w-0 flex-1">
-            <p className="font-semibold">
-              {entry.title}
-              {entry.organization && (
-                <span className="font-normal text-muted">, {entry.organization}</span>
-              )}
-            </p>
-            {entry.subtitle && (
-              <p className="mt-0.5 text-sm italic text-muted">{entry.subtitle}</p>
-            )}
-            {!isSkill && (range || entry.location) && (
-              <p className="hint mt-1">
-                {[range, entry.location].filter(Boolean).join(" · ")}
-              </p>
-            )}
-            {isSkill && entry.level && (
-              <p className="hint mt-1 capitalize">{entry.level}</p>
-            )}
-            {/*
-              A count while collapsed, so a folded card still tells you whether
-              there is anything inside it worth opening.
-            */}
-            {collapsed && <p className="hint mt-1">{summary}</p>}
-          </div>
-
-          <div className="flex shrink-0 items-center gap-0.5">
-            <button
-              className="rounded p-1.5 text-muted hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={!canMove}
-              title={
-                canMove
-                  ? "Move to another section"
-                  : section.type === "skill"
-                    ? "No other skill section to move this into"
-                    : "No other section of this kind to move this into"
-              }
-              onClick={() => setMoveOpen(true)}
-            >
-              <FolderInput size={15} />
-            </button>
-            <button
-              className="rounded p-1.5 text-muted hover:bg-canvas"
-              title="Edit entry"
-              onClick={() => setEditOpen(true)}
-            >
-              <Pencil size={15} />
-            </button>
-            <ConfirmButton
-              className="rounded p-1.5 text-muted hover:bg-canvas hover:text-red-600"
-              title="Delete entry"
-              message={`Delete "${entry.title}"${entry.bullets.length ? ` and its ${entry.bullets.length} bullet(s)` : ""}? This cannot be undone.`}
-              onConfirm={() => startTransition(() => void deleteEntry(entry.id))}
-            >
-              <Trash2 size={15} />
-            </ConfirmButton>
-          </div>
-        </div>
-
-        {!collapsed &&
-          (isSkill ? (
-            <div className="mt-3">
-              {skills.length === 0 ? (
-                <p className="hint">No sub-skills yet — edit to add them.</p>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {skills.map((s) => (
-                    <span
-                      key={s.name}
-                      className="rounded-lg border border-line px-2.5 py-1 text-sm"
-                      title={
-                        s.aliases.length
-                          ? `Also matches: ${s.aliases.join(", ")}`
-                          : undefined
-                      }
-                    >
-                      {s.name}
-                      {s.aliases.length > 0 && (
-                        <span className="ml-1 text-[10px] text-muted">
-                          +{s.aliases.length}
-                        </span>
-                      )}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          ) : (
-            <>
-              {bullets.length > 0 && (
-                <ul
-                  ref={sort.registerContainer("bullets")}
-                  className="mt-3 space-y-0.5"
-                >
-                  {bullets.map((b) => (
-                    <BulletRow
-                      key={b.id}
-                      bullet={b}
-                      dragging={sort.draggingId === b.id}
-                      register={sort.registerItem(b.id)}
-                      handle={sort.handleProps(b.id, "bullets")}
-                    />
-                  ))}
-                </ul>
-              )}
-
-              {adding ? (
-                <div className="mt-3 rounded-lg bg-canvas p-3">
-                  <textarea
-                    className="field min-h-20 resize-y bg-surface"
-                    placeholder="Engineered Spring Boot microservices processing 300K transactions daily, cutting latency 35%…"
-                    value={newBullet}
-                    autoFocus
-                    onChange={(e) => setNewBullet(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") {
-                        setNewBullet("");
-                        setAdding(false);
-                      }
-                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) addBullet();
-                    }}
-                  />
-                  <StrengthHint text={newBullet} />
-                  <div className="mt-2 flex gap-2">
-                    <button
-                      className="btn-accent px-3 py-1 text-xs"
-                      onClick={addBullet}
-                      disabled={pending || !newBullet.trim()}
-                    >
-                      Add bullet
-                    </button>
-                    <button
-                      className="btn-ghost px-3 py-1 text-xs"
-                      onClick={() => {
-                        setNewBullet("");
-                        setAdding(false);
-                      }}
-                    >
-                      Done
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  className="mt-3 flex items-center gap-1.5 text-sm text-muted hover:text-accent"
-                  onClick={() => setAdding(true)}
-                >
-                  <Plus size={14} /> Add bullet
-                </button>
-              )}
-            </>
+    <div className="space-y-2">
+      {ordered.length > 0 && (
+        <ul ref={sort.registerContainer("bullets")} className="space-y-2">
+          {ordered.map((b) => (
+            <BulletRow
+              key={b.id}
+              bullet={b}
+              dragging={sort.draggingId === b.id}
+              register={sort.registerItem(b.id)}
+              handle={sort.handleProps(b.id, "bullets")}
+            />
           ))}
-      </div>
-
-      <EntryDialog
-        open={editOpen}
-        onClose={() => setEditOpen(false)}
-        section={section}
-        entry={entry}
-      />
-
-      <MoveEntryDialog
-        open={moveOpen}
-        onClose={() => setMoveOpen(false)}
-        entryId={entry.id}
-        entryTitle={entry.title}
-        currentHeading={section.heading}
-        targets={moveTargets}
-      />
-    </>
+        </ul>
+      )}
+      <BulletComposer entryId={entryId} first={ordered.length === 0} />
+    </div>
   );
 }

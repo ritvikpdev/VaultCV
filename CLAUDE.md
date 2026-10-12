@@ -191,11 +191,14 @@ Dev machines are **Windows**; production is Vercel + Supabase.
   load-bearing: the in-flight order lives in a **ref updated synchronously**,
   because `setState` is async and a fast drag would otherwise reach the release
   handler thinking nothing changed and silently drop the write; and drags start
-  from a **grip handle**, not the row, because rows are links. No auto-scroll —
-  a list long enough to scroll mid-drag is the point to reach for a real
-  library. The Customize sections list is the only plausible candidate.
-- **Chevrons collapse; they never move.** True in both the vault and the resume
-  editor. Reordering is drag-only at every level. Don't reintroduce up/down
+  from a **grip handle**, not the row, because rows are links. Anything that
+  wraps — the vault's entry tiles, skill chips — passes `layout: "grid"`, which
+  hit-tests by reading order instead of height alone (`dropIndex`). No
+  auto-scroll — a list long enough to scroll mid-drag is the point to reach for
+  a real library. The Customize sections list is the only plausible candidate.
+- **Chevrons collapse; they never move.** True in the resume editor (the vault
+  has nothing to collapse — entries are tiles that open in a side panel).
+  Reordering is drag-only at every level. Don't reintroduce up/down
   arrows alongside it — the same icon meaning two things depending on the row is
   how misclicks get trained.
 - **Section order lives in Customize; Content has no move controls.** Content

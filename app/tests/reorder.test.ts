@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 
-import { findContainer, orderedBlocks, place, sameOrder } from "../src/lib/reorder.ts";
+import { dropIndex, findContainer, orderedBlocks, place, sameOrder } from "../src/lib/reorder.ts";
 
 describe("moving within one list", () => {
   const order = { a: [1, 2, 3, 4] };
@@ -141,5 +141,48 @@ describe("sidebar block order", () => {
 
   test("with no groups at all only the ungrouped block remains", () => {
     assert.deepEqual(orderedBlocks([], -1), [null]);
+  });
+});
+
+describe("finding the drop index", () => {
+  // Two rows of two 100×100 tiles with a 20px gap, laid out in reading order.
+  const grid = [
+    { top: 0, bottom: 100, left: 0, right: 100 },
+    { top: 0, bottom: 100, left: 120, right: 220 },
+    { top: 120, bottom: 220, left: 0, right: 100 },
+    { top: 120, bottom: 220, left: 120, right: 220 },
+  ];
+
+  test("a list looks only at height", () => {
+    const list = [
+      { top: 0, bottom: 40, left: 0, right: 300 },
+      { top: 40, bottom: 80, left: 0, right: 300 },
+    ];
+    assert.equal(dropIndex(list, 999, 10), 0);
+    assert.equal(dropIndex(list, 999, 30), 1);
+    assert.equal(dropIndex(list, 0, 500), 2);
+  });
+
+  test("a grid separates items that share a row by horizontal position", () => {
+    // Left half of the second tile on row one: before it, not after it.
+    assert.equal(dropIndex(grid, 140, 50, "grid"), 1);
+    // Right half of that tile: past it, into the next slot.
+    assert.equal(dropIndex(grid, 200, 50, "grid"), 2);
+    // A list layout can't tell those two apart at all — the bug grid mode
+    // exists for.
+    assert.equal(dropIndex(grid, 140, 40, "list"), dropIndex(grid, 200, 40, "list"));
+  });
+
+  test("a grid pointer in the gap between rows lands at the start of the next row", () => {
+    assert.equal(dropIndex(grid, 200, 110, "grid"), 2);
+  });
+
+  test("a grid pointer past the last tile lands last", () => {
+    assert.equal(dropIndex(grid, 210, 200, "grid"), 4);
+    assert.equal(dropIndex(grid, 0, 999, "grid"), 4);
+  });
+
+  test("items with no box on screen are skipped rather than counted as hits", () => {
+    assert.equal(dropIndex([null, grid[1]!], 140, 50, "grid"), 1);
   });
 });

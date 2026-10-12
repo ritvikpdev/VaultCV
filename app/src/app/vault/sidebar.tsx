@@ -3,7 +3,16 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
-import { FolderPlus, GripVertical, ListPlus, Search, Trash2, Upload, X } from "lucide-react";
+import {
+  FolderPlus,
+  GripVertical,
+  LayoutDashboard,
+  ListPlus,
+  Search,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 
 import { ConfirmButton } from "@/components/ui";
 import type { VaultGroup, VaultSection } from "@/db/schema";
@@ -41,10 +50,13 @@ export function VaultSidebar({
   blocks,
   counts,
   activeId,
+  overviewActive,
 }: {
   blocks: SidebarBlock[];
   counts: Record<number, number>;
   activeId: number | null;
+  /** True on the vault's landing view — no section open, no search. */
+  overviewActive: boolean;
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -142,14 +154,14 @@ export function VaultSidebar({
   const hasGroups = groups.length > 0;
 
   return (
-    <aside className="w-60 shrink-0 space-y-5">
+    <aside className="sticky top-20 max-h-[calc(100vh-6rem)] w-60 shrink-0 space-y-5 self-start overflow-y-auto pb-4 pr-1">
       <form onSubmit={submitSearch} className="relative">
         <Search
           size={14}
           className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted"
         />
         <input
-          className="field pl-8 pr-8"
+          className="field border-line bg-surface pl-8 pr-8"
           placeholder="Search vault"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -168,13 +180,29 @@ export function VaultSidebar({
         )}
       </form>
 
-      <Link
-        href="/vault/import"
-        className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-muted hover:bg-canvas hover:text-ink"
-      >
-        <Upload size={14} />
-        Import a resume
-      </Link>
+      <div className="space-y-0.5">
+        {sectionById.size > 0 && (
+          <Link
+            href="/vault"
+            className={cn(
+              "relative flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors",
+              overviewActive
+                ? "bg-accentSoft font-medium text-accent before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-accent"
+                : "text-muted hover:bg-surface hover:text-ink",
+            )}
+          >
+            <LayoutDashboard size={14} />
+            Overview
+          </Link>
+        )}
+        <Link
+          href="/vault/import"
+          className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-muted hover:bg-surface hover:text-ink"
+        >
+          <Upload size={14} />
+          Import a resume
+        </Link>
+      </div>
 
       {sectionById.size === 0 && (
         <p className="hint px-3">
@@ -270,7 +298,7 @@ export function VaultSidebar({
 
       <div className="space-y-1 border-t border-line pt-4">
         <button
-          className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-muted hover:bg-canvas hover:text-ink"
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-muted hover:bg-surface hover:text-ink"
           onClick={() => setNewSectionOpen(true)}
         >
           <ListPlus size={14} /> New section
@@ -316,7 +344,7 @@ export function VaultSidebar({
           </div>
         ) : (
           <button
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-muted hover:bg-canvas hover:text-ink"
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-muted hover:bg-surface hover:text-ink"
             onClick={() => setAddingGroup(true)}
           >
             <FolderPlus size={14} /> New group
@@ -382,10 +410,10 @@ function SectionRow({
       <Link
         href={`/vault?section=${section.id}`}
         className={cn(
-          "flex min-w-0 flex-1 items-center justify-between rounded-lg py-1.5 pl-1.5 pr-3 text-sm transition-colors",
+          "relative flex min-w-0 flex-1 items-center justify-between rounded-lg py-1.5 pl-2 pr-3 text-sm transition-colors",
           active
-            ? "bg-accentSoft font-medium text-accent"
-            : "text-muted hover:bg-canvas hover:text-ink",
+            ? "bg-accentSoft font-medium text-accent before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-accent"
+            : "text-muted hover:bg-surface hover:text-ink",
         )}
       >
         <span className="truncate">{section.heading}</span>

@@ -124,3 +124,17 @@ export const STRENGTH_LABELS: Record<number, string> = {
   4: "Strong",
   5: "Excellent",
 };
+
+/**
+ * Strength 1–5 → Tailwind fill, shared by the meter, the bullet edge and the
+ * overview chart. Kept here rather than in the client UI module so server
+ * components can read it.
+ */
+export const STRENGTH_COLORS = [
+  "bg-red-400",
+  "bg-orange-400",
+  "bg-yellow-400",
+  "bg-lime-500",
+  "bg-emerald-500",
+];
+

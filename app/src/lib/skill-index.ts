@@ -65,6 +65,34 @@ export function extractSkills(information: string): ExtractedSkill[] {
 }
 
 /**
+ * The skills line split into the pieces the user wrote, for the chip editor.
+ *
+ * Unlike `extractSkills` this neither canonicalises ("k8s" stays "k8s") nor
+ * drops short tokens: the chip editor writes its chips back as the whole line,
+ * so anything filtered here would be deleted from the vault on the next save —
+ * "C" is a language. Only exact repeats (ignoring case) are folded.
+ */
+export function splitSkillTokens(information: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const raw of stripHtml(information ?? "").split(SPLIT_RE)) {
+    const token = raw.trim().replace(/^[-–—*]\s*/, "");
+    const key = token.toLowerCase();
+    if (!token || seen.has(key)) continue;
+    seen.add(key);
+    out.push(token);
+  }
+
+  return out;
+}
+
+/** Chips back to the stored line. Pipes, because that is how the line prints. */
+export function joinSkillTokens(tokens: string[]): string {
+  return tokens.join(" | ");
+}
+
+/**
  * Render extracted skills back to a display string, for the resume line and
  * for pre-filling the editor. Kept next to the parser so the round trip stays
  * obvious: what you typed is what you get back.
