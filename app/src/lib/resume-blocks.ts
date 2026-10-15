@@ -1,3 +1,4 @@
+import type { SectionOptions } from "../db/schema.ts";
 import {
   groupSkills,
   type ResolvedEntry,
@@ -20,14 +21,34 @@ export type ResumeBlock =
   | { kind: "header"; key: string }
   | { kind: "summary"; key: string; text: string }
   | { kind: "heading"; key: string; sectionId: number; heading: string }
-  | { kind: "entry"; key: string; sectionId: number; entry: ResolvedEntry }
+  | {
+      kind: "entry";
+      key: string;
+      sectionId: number;
+      entry: ResolvedEntry;
+      options: SectionOptions;
+    }
   | {
       kind: "skills";
       key: string;
       sectionId: number;
       groups: Array<{ category: string; names: string[] }>;
+      options: SectionOptions;
     }
   | { kind: "pageBreak"; key: string };
+
+/**
+ * An entry worth printing: something in its title line or a visible bullet.
+ * A freshly added, still-empty entry is skipped, so it appears in the preview
+ * with the first thing typed into it rather than as a blank line.
+ */
+export function hasContent(entry: ResolvedEntry): boolean {
+  return Boolean(
+    entry.title.trim() ||
+      entry.organization.trim() ||
+      entry.bullets.some((b) => b.isVisible && b.text.trim()),
+  );
+}
 
 export function buildBlocks(resume: ResolvedResume): ResumeBlock[] {
   const blocks: ResumeBlock[] = [{ kind: "header", key: "header" }];
@@ -55,9 +76,10 @@ export function buildBlocks(resume: ResolvedResume): ResumeBlock[] {
         key: `s-${section.id}`,
         sectionId: section.id,
         groups,
+        options: section.options,
       });
     } else {
-      const entries = section.entries.filter((e) => e.isVisible);
+      const entries = section.entries.filter((e) => e.isVisible && hasContent(e));
       if (entries.length === 0) continue;
 
       blocks.push({
@@ -73,6 +95,7 @@ export function buildBlocks(resume: ResolvedResume): ResumeBlock[] {
           key: `e-${entry.id}`,
           sectionId: section.id,
           entry,
+          options: section.options,
         });
       }
     }

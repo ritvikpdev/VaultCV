@@ -4,7 +4,9 @@ import type {
   ResumeEntry,
   ResumeSection,
   ResumeSkill,
+  ContactKey,
   ResumeStyle,
+  SectionOptions,
   SectionType,
   VaultBullet,
   VaultEntry,
@@ -33,7 +35,12 @@ export type VaultLinkMode = "snapshot" | "linked";
 /** Flattened, render-ready shapes. The renderer never sees a nullable override. */
 export type ResolvedBullet = {
   id: number;
+  /** Plain text — what the tuner, scoring and the vault read. */
   text: string;
+  /** Sanitised inline HTML from the rich-text editor, or null for plain text. */
+  html: string | null;
+  align: "left" | "center" | "right" | "justify";
+  isParagraph: boolean;
   sourceBulletId: number | null;
   isVisible: boolean;
 };
@@ -58,6 +65,9 @@ export type ResolvedSection = {
   id: number;
   sectionType: SectionType;
   heading: string;
+  /** Editor icon override; null means the type's default. */
+  icon: string | null;
+  options: SectionOptions;
   layout: "normal" | "skill";
   isVisible: boolean;
   pageBreakAfter: boolean;
@@ -83,6 +93,10 @@ function pick(override: string | null | undefined, fallback: string | undefined)
   return override ?? fallback ?? "";
 }
 
+function normaliseAlign(value: string | null): ResolvedBullet["align"] {
+  return value === "center" || value === "right" || value === "justify" ? value : "left";
+}
+
 export function resolveBullet(
   row: ResumeBullet,
   vault: VaultBullet | undefined,
@@ -96,6 +110,11 @@ export function resolveBullet(
   return {
     id: row.id,
     text,
+    // Formatting belongs to this resume's copy. A linked bullet still reading
+    // through to the vault (text NULL) has none.
+    html: row.text === null ? null : row.html,
+    align: normaliseAlign(row.align),
+    isParagraph: row.isParagraph,
     sourceBulletId: row.sourceBulletId,
     isVisible: row.isVisible,
   };
@@ -114,9 +133,9 @@ export function resolveEntry(
     location: pick(row.locationOverride, vault?.location),
     startDate: pick(row.startDateOverride, vault?.startDate),
     endDate: pick(row.endDateOverride, vault?.endDate),
-    isCurrent: vault?.isCurrent ?? false,
-    url: vault?.url ?? "",
-    meta: vault?.meta ?? {},
+    isCurrent: row.isCurrentOverride ?? vault?.isCurrent ?? false,
+    url: row.urlOverride ?? vault?.url ?? "",
+    meta: row.metaOverride ?? vault?.meta ?? {},
     sourceEntryId: row.sourceEntryId,
     isVisible: row.isVisible,
     bullets,
@@ -141,6 +160,8 @@ export function resolveSection(
     id: row.id,
     sectionType: row.sectionType,
     heading: row.heading,
+    icon: row.icon,
+    options: row.options ?? {},
     layout: row.layout === "skill" ? "skill" : "normal",
     isVisible: row.isVisible,
     pageBreakAfter: row.pageBreakAfter,
@@ -152,6 +173,15 @@ export function resolveSection(
 /* ------------------------------------------------------------------ */
 /* Display helpers — shared by preview and print                       */
 /* ------------------------------------------------------------------ */
+
+/** Every option with its default filled in — the look resumes had before options existed. */
+export function sectionOptions(section: Pick<ResolvedSection, "options">): Required<SectionOptions> {
+  return {
+    titleOrder: section.options.titleOrder ?? "title-first",
+    titleJoin: section.options.titleJoin ?? "comma",
+    skillsLayout: section.options.skillsLayout ?? "lines",
+  };
+}
 
 /** "10/2022 – 07/2025", "08/2025 – Present", "2025", or "". */
 export function formatDateRange(entry: {
@@ -173,21 +203,65 @@ function withScheme(url: string): string {
   return /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`;
 }
 
+/** The contact line's order when the profile hasn't chosen one — how it always printed. */
+export const DEFAULT_CONTACT_ORDER: ContactKey[] = ["email", "phone", "location", "links", "details"];
+
+/** The saved order, with any group it doesn't mention appended in default order. */
+export function contactOrder(saved: ContactKey[] | undefined): ContactKey[] {
+  const seen = new Set<ContactKey>();
+  const out: ContactKey[] = [];
+  for (const key of [...(saved ?? []), ...DEFAULT_CONTACT_ORDER]) {
+    if (DEFAULT_CONTACT_ORDER.includes(key) && !seen.has(key)) {
+      seen.add(key);
+      out.push(key);
+    }
+  }
+  return out;
+}
+
+const URLISH = /^(https?:\/\/|www\.)|^[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$/i;
+
 /**
- * Contact line under the name: email · phone · location · links.
+ * Contact line under the name, in the profile's chosen order.
  *
  * A link prints as its label (e.g. "LinkedIn"), not the raw URL, with the URL
- * carried as `href` — the whole point of the label field. Email and phone have
- * no separate label, so they print as themselves.
+ * carried as `href` — the whole point of the label field. Email and phone
+ * print as themselves and link as mailto:/tel:, which is invisible on paper
+ * and clickable in the PDF. A detail ("Nationality: Indian") prints as
+ * "Label: value", and as a link when the value is a URL.
  */
 export function formatContactLine(profile: Profile): ContactItem[] {
   const items: ContactItem[] = [];
-  if (profile.email) items.push({ text: profile.email });
-  if (profile.phone) items.push({ text: profile.phone });
-  if (profile.location) items.push({ text: profile.location });
-  for (const link of profile.links) {
-    if (!link.url) continue;
-    items.push({ text: link.label || link.url, href: withScheme(link.url) });
+  for (const key of contactOrder(profile.contactOrder)) {
+    switch (key) {
+      case "email":
+        if (profile.email) items.push({ text: profile.email, href: `mailto:${profile.email}` });
+        break;
+      case "phone":
+        if (profile.phone) {
+          items.push({ text: profile.phone, href: `tel:${profile.phone.replace(/[^\d+]/g, "")}` });
+        }
+        break;
+      case "location":
+        if (profile.location) items.push({ text: profile.location });
+        break;
+      case "links":
+        for (const link of profile.links) {
+          if (!link.url) continue;
+          items.push({ text: link.label || link.url, href: withScheme(link.url) });
+        }
+        break;
+      case "details":
+        for (const d of profile.details ?? []) {
+          if (!d.value) continue;
+          items.push(
+            URLISH.test(d.value)
+              ? { text: d.label || d.value, href: withScheme(d.value) }
+              : { text: d.label ? `${d.label}: ${d.value}` : d.value },
+          );
+        }
+        break;
+    }
   }
   return items;
 }

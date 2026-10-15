@@ -340,6 +340,23 @@ Everything below is built and working.
 - **Drag to reorder** groups, sections, entries and bullets. Sections can be
   dragged between groups to file them.
 
+### The resume editor
+
+- **FlowCV-style Content tab.** A list of cards — personal details, one
+  collapsible card per section with draggable entry rows and an eye to hide an
+  entry from this resume while keeping it — and an editor view that replaces
+  the list when you open an entry. No Save button: the live preview updates on
+  the same frame as you type, and changes save themselves.
+- **Rich-text descriptions** with bold, italic, underline, links, alignment and
+  paragraph lines, where each line is still its own bullet with its own vault
+  link, strength score and visibility.
+- **Pull from vault everywhere you add content:** whole entries from a
+  section's footer, single bullets from inside the entry editor, and
+  save-to-vault for entries and bullets written on the resume.
+- **Masked MM/YYYY dates** with a month/year picker and "Present".
+- **Per-section customizations** (title order, title line style, skills
+  layout) and editor icons for sections.
+
 ### Import
 
 - **PDF or pasted text.** Text is extracted from glyph coordinates rather than

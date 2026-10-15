@@ -20,6 +20,8 @@ import { STRENGTH_COLORS, STRENGTH_LABELS } from "@/lib/bullet-strength";
 import { cn } from "@/lib/utils";
 import type { AttentionItem, AttentionKind, VaultOverview } from "@/lib/vault-overview";
 
+import { ClearAttentionButton, RestoreClearedButton } from "./attention-actions";
+
 /**
  * The vault's landing view: what's in it, how well it's written, what's
  * unfinished. Server-rendered from data the page already holds; the only
@@ -79,23 +81,25 @@ function AttentionRow({ item }: { item: AttentionItem }) {
   const Icon = copy.icon;
   const isSection = item.entryId === undefined;
 
+  const label = copy.text(isSection ? item.sectionHeading : (item.entryTitle ?? ""));
+
   return (
-    <li>
+    // The clear button sits beside the link, not inside it: a button nested
+    // in an anchor would navigate as well as clear.
+    <li className="flex items-start gap-1">
       <Link
         href={
           isSection
             ? `/vault?section=${item.sectionId}`
             : `/vault?section=${item.sectionId}&entry=${item.entryId}`
         }
-        className="group flex items-start gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-canvas"
+        className="group flex min-w-0 flex-1 items-start gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-canvas"
       >
         <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${copy.tone}`}>
           <Icon size={14} />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-sm font-medium">
-            {copy.text(isSection ? item.sectionHeading : (item.entryTitle ?? ""))}
-          </span>
+          <span className="block text-sm font-medium">{label}</span>
           {item.detail && (
             <span className="mt-0.5 block truncate text-xs text-muted">&ldquo;{item.detail}&rdquo;</span>
           )}
@@ -114,6 +118,7 @@ function AttentionRow({ item }: { item: AttentionItem }) {
           className="mt-1.5 shrink-0 text-muted opacity-0 transition-opacity group-hover:opacity-100"
         />
       </Link>
+      <ClearAttentionButton itemKey={item.key} label={label} />
     </li>
   );
 }
@@ -292,16 +297,22 @@ export function VaultOverviewView({
           {attention.length === 0 ? (
             <div className="mt-6 flex flex-col items-center gap-2 py-4 text-center">
               <CheckCircle2 size={28} className="text-emerald-500" />
-              <p className="text-sm font-medium">Nothing unfinished</p>
+              {/* Don't claim "nothing unfinished" when the list is only empty
+                  because everything in it was cleared. */}
+              <p className="text-sm font-medium">
+                {overview.cleared > 0 ? "All reminders cleared" : "Nothing unfinished"}
+              </p>
               <p className="hint">
-                Every section is in a group, every entry has content and dates, and no bullet scores weak.
+                {overview.cleared > 0
+                  ? "Cleared items stay hidden until you show them again."
+                  : "Every section is in a group, every entry has content and dates, and no bullet scores weak."}
               </p>
             </div>
           ) : (
             <>
               <ul className="-mx-2 mt-3 space-y-0.5">
-                {visible.map((item, i) => (
-                  <AttentionRow key={`${item.kind}-${item.entryId}-${i}`} item={item} />
+                {visible.map((item) => (
+                  <AttentionRow key={item.key} item={item} />
                 ))}
               </ul>
               {folded.length > 0 && (
@@ -311,13 +322,19 @@ export function VaultOverviewView({
                     <span className="hidden group-open:inline">Show fewer</span>
                   </summary>
                   <ul className="-mx-2 space-y-0.5">
-                    {folded.map((item, i) => (
-                      <AttentionRow key={`${item.kind}-${item.entryId}-f${i}`} item={item} />
+                    {folded.map((item) => (
+                      <AttentionRow key={item.key} item={item} />
                     ))}
                   </ul>
                 </details>
               )}
             </>
+          )}
+
+          {overview.cleared > 0 && (
+            <div className="mt-3 flex justify-end border-t border-line pt-3">
+              <RestoreClearedButton count={overview.cleared} />
+            </div>
           )}
         </div>
 

@@ -7,16 +7,22 @@
   body {
     @apply bg-canvas text-ink antialiased;
   }
+
+  /* One focus treatment for every control: a soft violet ring, visible on
+     keyboard focus. Inputs get theirs from .field. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-violet/40 ring-offset-1 ring-offset-surface;
+  }
 }
 
 @layer components {
   .card {
-    @apply rounded-card border border-line bg-surface;
+    @apply rounded-card border border-line/70 bg-surface shadow-card;
   }
 
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm
-           font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm
+           font-medium transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
     @apply btn bg-ink text-white hover:bg-ink/90;
@@ -24,13 +30,23 @@
   .btn-accent {
     @apply btn bg-accent text-white hover:bg-accent/90;
   }
+  /* The pink-to-coral pill: Add Content, Done — the "move forward" actions. */
+  .btn-gradient {
+    @apply btn rounded-full bg-brand-gradient text-white shadow-card hover:opacity-95 hover:shadow-lift;
+  }
   .btn-ghost {
     @apply btn border border-line bg-surface text-ink hover:bg-canvas;
   }
+  /* Small lavender pill for AI and suggestion actions. */
+  .pill-ai {
+    @apply inline-flex items-center gap-1 rounded-full bg-violetSoft px-2.5 py-1 text-xs font-medium
+           text-violet transition-colors hover:bg-violet/15 disabled:cursor-not-allowed disabled:opacity-50;
+  }
 
   .field {
-    @apply w-full rounded-lg border border-transparent bg-canvas px-3 py-2 text-sm
-           outline-none transition-colors focus:border-accent focus:bg-surface;
+    @apply w-full rounded-xl border border-transparent bg-field px-3 py-2 text-sm
+           outline-none transition-all duration-150 placeholder:text-muted/70
+           focus:border-violet/60 focus:bg-surface focus:ring-4 focus:ring-violet/10;
   }
   .label {
     @apply mb-1.5 block text-sm font-medium text-ink;
@@ -38,6 +54,24 @@
   .hint {
     @apply text-xs text-muted;
   }
+}
+
+/*
+ * Description editor (Tiptap) in the resume Content tab. App chrome, so it
+ * uses the app's tokens; what it produces is drawn by the resume renderer.
+ */
+.rich-lines .ProseMirror {
+  outline: none;
+}
+.rich-lines .ProseMirror [data-node-view-content] {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.rich-lines .ProseMirror a {
+  @apply text-violet underline underline-offset-2;
+}
+.rich-lines .ProseMirror strong {
+  font-weight: 700;
 }
 
 /*
@@ -88,6 +122,20 @@
    as unfinished, and shrinking the font to fit would make it illegible for
    long link lists. If it doesn't fit, the editor warns instead of hiding
    anything: the printed line can overflow, but nothing goes missing silently. */
+/* Professional title under the name, when the profile has one. */
+.resume-doc .r-title {
+  text-align: center;
+  margin-top: 1pt;
+}
+
+/* Links inside bullets print as their text; an underline marks them on
+   screen and in the PDF without turning them blue. */
+.resume-doc .r-bullet a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 1.5pt;
+}
+
 .resume-doc .r-contact {
   text-align: center;
   white-space: nowrap;

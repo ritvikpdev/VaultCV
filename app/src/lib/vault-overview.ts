@@ -36,6 +36,13 @@ type OverviewSection = {
 export type AttentionKind = "no-group" | "no-bullets" | "no-skills" | "weak-bullet" | "no-dates";
 
 export type AttentionItem = {
+  /**
+   * Stable identity for clearing: the kind plus the row it's about (the
+   * bullet for a weak bullet, the section for an ungrouped one, else the
+   * entry). Survives reloads and reordering; a fixed problem just stops
+   * being generated, so a stale cleared key is harmless.
+   */
+  key: string;
   kind: AttentionKind;
   sectionId: number;
   sectionHeading: string;
@@ -51,6 +58,8 @@ export type AttentionItem = {
 
 export type VaultOverview = {
   totals: { sections: number; entries: number; bullets: number; pinned: number; skills: number };
+  /** How many items are hidden because the user cleared them. */
+  cleared: number;
   /** Bullet counts by strength: index 0 is a score of 1, index 4 a score of 5. */
   strength: [number, number, number, number, number];
   attention: AttentionItem[];
@@ -73,7 +82,10 @@ const KIND_ORDER: Record<AttentionKind, number> = {
   "no-dates": 4,
 };
 
-export function summarizeVault(sections: OverviewSection[]): VaultOverview {
+export function summarizeVault(
+  sections: OverviewSection[],
+  cleared: ReadonlySet<string> = new Set(),
+): VaultOverview {
   const strength: VaultOverview["strength"] = [0, 0, 0, 0, 0];
   const attention: AttentionItem[] = [];
   const skillKeys = new Set<string>();
@@ -89,7 +101,9 @@ export function summarizeVault(sections: OverviewSection[]): VaultOverview {
       sectionHeading: section.heading,
       groupName: section.groupName,
     };
-    if (section.groupName === null) attention.push({ kind: "no-group", ...place });
+    if (section.groupName === null) {
+      attention.push({ key: `no-group:${section.id}`, kind: "no-group", ...place });
+    }
 
     for (const entry of section.entries) {
       entries += 1;
@@ -101,7 +115,7 @@ export function summarizeVault(sections: OverviewSection[]): VaultOverview {
 
       if (isSkill) {
         const found = extractSkills(entry.information);
-        if (found.length === 0) attention.push({ kind: "no-skills", ...where });
+        if (found.length === 0) attention.push({ key: `no-skills:${entry.id}`, kind: "no-skills", ...where });
         for (const s of found) {
           const key = s.name.toLowerCase();
           if (skillKeys.has(key)) continue;
@@ -111,9 +125,9 @@ export function summarizeVault(sections: OverviewSection[]): VaultOverview {
         continue;
       }
 
-      if (entry.bullets.length === 0) attention.push({ kind: "no-bullets", ...where });
+      if (entry.bullets.length === 0) attention.push({ key: `no-bullets:${entry.id}`, kind: "no-bullets", ...where });
       if (!entry.startDate && !entry.endDate && !entry.isCurrent) {
-        attention.push({ kind: "no-dates", ...where });
+        attention.push({ key: `no-dates:${entry.id}`, kind: "no-dates", ...where });
       }
 
       for (const b of entry.bullets) {
@@ -122,7 +136,7 @@ export function summarizeVault(sections: OverviewSection[]): VaultOverview {
         const score = Math.max(1, Math.min(5, Math.round(b.strength)));
         strength[score - 1] += 1;
         if (score <= WEAK_BULLET_MAX) {
-          attention.push({ kind: "weak-bullet", ...where, detail: b.text, strength: score });
+          attention.push({ key: `weak-bullet:${b.id}`, kind: "weak-bullet", ...where, detail: b.text, strength: score });
         }
       }
     }
@@ -135,10 +149,13 @@ export function summarizeVault(sections: OverviewSection[]): VaultOverview {
       KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || (a.strength ?? 0) - (b.strength ?? 0),
   );
 
+  const visible = attention.filter((a) => !cleared.has(a.key));
+
   return {
     totals: { sections: sections.length, entries, bullets, pinned, skills: skills.length },
+    cleared: attention.length - visible.length,
     strength,
-    attention,
+    attention: visible,
     skills,
   };
 }

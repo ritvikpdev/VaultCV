@@ -1,10 +1,14 @@
+import type { SectionOptions } from "@/db/schema";
 import {
   formatContactLine,
   formatDateRange,
+  sectionOptions,
+  type ResolvedBullet,
   type ResolvedEntry,
   type ResolvedResume,
 } from "@/lib/resume-model";
 import { buildBlocks, pageWidthIn, type ResumeBlock } from "@/lib/resume-blocks";
+import { sanitizeInlineHtml } from "@/lib/rich-text";
 
 /**
  * THE resume renderer. There is exactly one.
@@ -49,6 +53,7 @@ export function ResumeBlockView({
       return (
         <header className="r-block">
           <div className="r-name">{resume.profile.fullName || "Your Name"}</div>
+          {resume.profile.title && <div className="r-title">{resume.profile.title}</div>}
           {contact.length > 0 && (
             <div className="r-contact">
               {contact.map((item, i) => (
@@ -87,32 +92,121 @@ export function ResumeBlockView({
       );
 
     case "skills":
-      return (
-        <div className="r-block" style={{ marginTop: "3pt" }}>
-          {block.groups.map((g) => (
-            <div key={g.category} className="r-bullet">
-              <strong>{g.category}</strong> — {g.names.join(" | ")}
-            </div>
-          ))}
-        </div>
-      );
+      return <SkillsBlock groups={block.groups} options={block.options} />;
 
     case "entry":
-      return <EntryBlock entry={block.entry} resume={resume} />;
+      return <EntryBlock entry={block.entry} resume={resume} options={block.options} />;
 
     case "pageBreak":
       return <div className="r-page-break" />;
   }
 }
 
+/**
+ * Skill lines. "lines" is the original look — one line per category,
+ * "Category — a | b" — and stays the default.
+ */
+function SkillsBlock({
+  groups,
+  options,
+}: {
+  groups: Array<{ category: string; names: string[] }>;
+  options: SectionOptions;
+}) {
+  const { skillsLayout } = sectionOptions({ options });
+
+  if (skillsLayout === "inline") {
+    return (
+      <p className="r-block" style={{ marginTop: "3pt" }}>
+        {groups.map((g, i) => (
+          <span key={g.category}>
+            {i > 0 && " · "}
+            {g.category && <strong>{g.category}: </strong>}
+            {g.names.join(", ")}
+          </span>
+        ))}
+      </p>
+    );
+  }
+
+  if (skillsLayout === "bullets") {
+    return (
+      <ul className="r-block" style={{ margin: "3pt 0 0", paddingLeft: "14pt", listStyle: "disc" }}>
+        {groups.map((g) => (
+          <li key={g.category} className="r-bullet">
+            {g.category && <strong>{g.category}: </strong>}
+            {g.names.join(", ")}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  return (
+    <div className="r-block" style={{ marginTop: "3pt" }}>
+      {groups.map((g) => (
+        <div key={g.category} className="r-bullet">
+          {skillsLayout === "colon" ? (
+            <>
+              {g.category && <strong>{g.category}: </strong>}
+              {g.names.join(", ")}
+            </>
+          ) : (
+            <>
+              <strong>{g.category}</strong> — {g.names.join(" | ")}
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** A bullet's content: its sanitised HTML when formatted, else its text. */
+function BulletBody({ bullet }: { bullet: ResolvedBullet }) {
+  if (bullet.html) {
+    // Sanitised again at render, not only at write: whatever is in the column,
+    // only strong/em/u/safe links reach the page.
+    return <span dangerouslySetInnerHTML={{ __html: sanitizeInlineHtml(bullet.html) }} />;
+  }
+  return <>{bullet.text}</>;
+}
+
+/**
+ * Consecutive bullets share one list; a paragraph line breaks the list and
+ * prints as its own block. An entry with no paragraph lines renders exactly
+ * as before: one <ul>.
+ */
+function groupLines(bullets: ResolvedBullet[]) {
+  const runs: Array<{ kind: "list" | "para"; items: ResolvedBullet[] }> = [];
+  for (const b of bullets) {
+    const kind = b.isParagraph ? "para" : "list";
+    const last = runs[runs.length - 1];
+    if (last && last.kind === "list" && kind === "list") last.items.push(b);
+    else runs.push({ kind, items: [b] });
+  }
+  return runs;
+}
+
+function alignStyle(b: ResolvedBullet): React.CSSProperties | undefined {
+  return b.align === "left" ? undefined : { textAlign: b.align };
+}
+
+function withScheme(url: string): string {
+  return /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`;
+}
+
 function EntryBlock({
   entry,
   resume,
+  options,
 }: {
   entry: ResolvedEntry;
   resume: ResolvedResume;
+  options: SectionOptions;
 }) {
   const { style } = resume;
+  const { titleOrder, titleJoin } = sectionOptions({ options });
   const dates = formatDateRange(entry);
   const right = [dates, entry.location].filter(Boolean).join(" | ");
   const bullets = entry.bullets.filter((b) => b.isVisible && b.text.trim());
@@ -122,6 +216,53 @@ function EntryBlock({
     fontStyle: style.subtitleStyle === "italic" ? "italic" : "normal",
     fontWeight: style.subtitleStyle === "bold" ? 700 : 400,
   };
+
+  // The organisation, linked when the entry has a URL — set from the editor's
+  // Link button, or carried over from the vault entry.
+  const org = entry.organization ? (
+    entry.url ? (
+      <a href={withScheme(entry.url)} target="_blank" rel="noreferrer" style={{ color: "inherit", textDecoration: "none" }}>
+        {entry.organization}
+      </a>
+    ) : (
+      entry.organization
+    )
+  ) : null;
+
+  const stacked = titleJoin === "stacked" && org !== null;
+  const sep = titleJoin === "dash" ? " – " : ", ";
+  const orgFirst = titleOrder === "org-first" && org !== null;
+
+  // Title line. The defaults ("title-first", "comma") are the original look:
+  // **Title**, *Org*, *Subtitle*.
+  let titleLine: React.ReactNode;
+  if (stacked) {
+    titleLine = <strong>{orgFirst ? org : entry.title}</strong>;
+  } else if (orgFirst) {
+    titleLine = (
+      <>
+        <strong>{org}</strong>
+        {entry.title && (
+          <>
+            {sep}
+            <span style={subtitleStyle}>{entry.title}</span>
+          </>
+        )}
+      </>
+    );
+  } else {
+    titleLine = (
+      <>
+        <strong>{entry.title}</strong>
+        {org !== null && (
+          <>
+            {entry.title ? sep : null}
+            <span style={subtitleStyle}>{org}</span>
+          </>
+        )}
+      </>
+    );
+  }
 
   return (
     <div className="r-block r-entry" style={{ marginTop: "var(--r-entry-gap)" }}>
@@ -133,13 +274,8 @@ function EntryBlock({
         }
       >
         <div style={{ flex: 1 }}>
-          <strong>{entry.title}</strong>
-          {entry.organization && (
-            <>
-              , <span style={subtitleStyle}>{entry.organization}</span>
-            </>
-          )}
-          {entry.subtitle && (
+          {titleLine}
+          {!stacked && entry.subtitle && (
             <>
               , <span style={subtitleStyle}>{entry.subtitle}</span>
             </>
@@ -150,14 +286,37 @@ function EntryBlock({
         )}
       </div>
 
-      {bullets.length > 0 && (
-        <ul style={{ margin: "2pt 0 0", paddingLeft: "14pt", listStyle: "disc" }}>
-          {bullets.map((b) => (
-            <li key={b.id} className="r-bullet">
-              {b.text}
-            </li>
-          ))}
-        </ul>
+      {stacked && (
+        <div style={subtitleStyle}>
+          {orgFirst ? entry.title : org}
+          {entry.subtitle && <>, {entry.subtitle}</>}
+        </div>
+      )}
+
+      {groupLines(bullets).map((run) =>
+        run.kind === "list" ? (
+          <ul
+            key={`l-${run.items[0]!.id}`}
+            style={{ margin: "2pt 0 0", paddingLeft: "14pt", listStyle: "disc" }}
+          >
+            {run.items.map((b) => (
+              <li key={b.id} className="r-bullet" style={alignStyle(b)} data-bullet-id={b.id}>
+                <BulletBody bullet={b} />
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p
+            key={`p-${run.items[0]!.id}`}
+            className="r-bullet"
+            // Lets the editor's preview find each bullet on the page (the
+            // strength strip beside it). Invisible in print.
+            data-bullet-id={run.items[0]!.id}
+            style={{ margin: "2pt 0 0", ...alignStyle(run.items[0]!) }}
+          >
+            <BulletBody bullet={run.items[0]!} />
+          </p>
+        ),
       )}
     </div>
   );

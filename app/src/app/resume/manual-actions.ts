@@ -175,10 +175,107 @@ export async function addManualEntry(
 }
 
 /**
- * Copy a resume entry into the vault and link them.
+ * The vault entry a resume entry belongs to, creating it from the resume's
+ * fields if it has none yet, and linking the two.
  *
- * Called only after the user answers Yes. Links via `source_entry_id` so the
- * entry stops looking resume-only, and its bullets go across too.
+ * Creates the entry only — no bullets. Callers decide which bullets go with
+ * it: all of them (save entry) or just one (save this bullet).
+ */
+async function ensureVaultEntryFor(
+  entry: typeof resumeEntries.$inferSelect,
+): Promise<{ ok: true; id: number; resumeId: number | null } | { ok: false; error: string }> {
+  const section = await first(
+    db.select().from(resumeSections).where(eq(resumeSections.id, entry.sectionId)),
+  );
+  if (!section) return fail("Section not found");
+  if (entry.sourceEntryId) return { ok: true, id: entry.sourceEntryId, resumeId: section.resumeId };
+
+  const vaultSectionId = await ensureVaultSection(
+    section.heading,
+    section.layout === "skill" ? "skill" : "normal",
+  );
+
+  const lastOrder = await first(
+    db
+      .select({ o: vaultEntries.displayOrder })
+      .from(vaultEntries)
+      .where(eq(vaultEntries.sectionId, vaultSectionId))
+      .orderBy(desc(vaultEntries.displayOrder)),
+  );
+
+  const vaultRow = (await first(
+    db
+      .insert(vaultEntries)
+      .values({
+        sectionId: vaultSectionId,
+        title: entry.titleOverride?.trim() || "Untitled",
+        organization: entry.organizationOverride ?? "",
+        subtitle: entry.subtitleOverride ?? "",
+        location: entry.locationOverride ?? "",
+        startDate: entry.startDateOverride ?? "",
+        endDate: entry.endDateOverride ?? "",
+        isCurrent: entry.isCurrentOverride ?? false,
+        url: entry.urlOverride ?? "",
+        meta: entry.metaOverride ?? {},
+        displayOrder: (lastOrder?.o ?? -1) + 1,
+      })
+      .returning({ id: vaultEntries.id }),
+  ))!;
+
+  await db
+    .update(resumeEntries)
+    .set({ sourceEntryId: vaultRow.id })
+    .where(eq(resumeEntries.id, entry.id));
+
+  return { ok: true, id: vaultRow.id, resumeId: section.resumeId };
+}
+
+/**
+ * Copy one resume bullet into a vault entry and link them.
+ *
+ * Plain `text` only — formatting belongs to the resume. If the vault entry
+ * already holds the same wording, the bullet is linked to that row instead of
+ * duplicating it.
+ */
+async function copyBulletToVault(
+  bullet: typeof resumeBullets.$inferSelect,
+  vaultEntryId: number,
+): Promise<number> {
+  const text = bullet.text!.trim();
+  const siblings = await db.select().from(vaultBullets).where(eq(vaultBullets.entryId, vaultEntryId));
+  const same = siblings.find((v) => normalizeTerm(v.text) === normalizeTerm(text));
+
+  let vaultBulletId: number;
+  if (same) {
+    vaultBulletId = same.id;
+  } else {
+    const last = siblings.reduce((m, v) => Math.max(m, v.displayOrder), -1);
+    vaultBulletId = (await first(
+      db
+        .insert(vaultBullets)
+        .values({
+          entryId: vaultEntryId,
+          text,
+          strength: bulletStrength(text),
+          displayOrder: last + 1,
+        })
+        .returning({ id: vaultBullets.id }),
+    ))!.id;
+  }
+
+  await db
+    .update(resumeBullets)
+    .set({ sourceBulletId: vaultBulletId })
+    .where(eq(resumeBullets.id, bullet.id));
+  return vaultBulletId;
+}
+
+/**
+ * Save a resume entry to the vault, with every bullet not already there.
+ *
+ * Safe to call again: on an entry that's already linked it adds just the
+ * bullets written since, so "Save entry to vault" stays useful after a few
+ * single bullets have been saved one by one.
  */
 export async function saveEntryToVault(resumeEntryId: number): Promise<ActionResult<number>> {
   return withVault(async () => {
@@ -186,41 +283,9 @@ export async function saveEntryToVault(resumeEntryId: number): Promise<ActionRes
       db.select().from(resumeEntries).where(eq(resumeEntries.id, resumeEntryId)),
     );
     if (!entry) return fail("Entry not found");
-    if (entry.sourceEntryId) return { ok: true, data: entry.sourceEntryId };
 
-    const section = await first(
-      db.select().from(resumeSections).where(eq(resumeSections.id, entry.sectionId)),
-    );
-    if (!section) return fail("Section not found");
-
-    const vaultSectionId = await ensureVaultSection(
-      section.heading,
-      section.layout === "skill" ? "skill" : "normal",
-    );
-
-    const lastOrder = await first(
-      db
-        .select({ o: vaultEntries.displayOrder })
-        .from(vaultEntries)
-        .where(eq(vaultEntries.sectionId, vaultSectionId))
-        .orderBy(desc(vaultEntries.displayOrder)),
-    );
-
-    const vaultRow = (await first(
-      db
-        .insert(vaultEntries)
-        .values({
-          sectionId: vaultSectionId,
-          title: entry.titleOverride ?? "Untitled",
-          organization: entry.organizationOverride ?? "",
-          subtitle: entry.subtitleOverride ?? "",
-          location: entry.locationOverride ?? "",
-          startDate: entry.startDateOverride ?? "",
-          endDate: entry.endDateOverride ?? "",
-          displayOrder: (lastOrder?.o ?? -1) + 1,
-        })
-        .returning({ id: vaultEntries.id }),
-    ))!;
+    const target = await ensureVaultEntryFor(entry);
+    if (!target.ok) return target;
 
     const bullets = await db
       .select()
@@ -228,35 +293,14 @@ export async function saveEntryToVault(resumeEntryId: number): Promise<ActionRes
       .where(eq(resumeBullets.resumeEntryId, resumeEntryId))
       .orderBy(asc(resumeBullets.displayOrder));
 
-    for (const [i, b] of bullets.entries()) {
+    for (const b of bullets) {
       if (!b.text?.trim() || b.sourceBulletId) continue;
-
-      const created = (await first(
-        db
-          .insert(vaultBullets)
-          .values({
-            entryId: vaultRow.id,
-            text: b.text,
-            strength: bulletStrength(b.text),
-            displayOrder: i,
-          })
-          .returning({ id: vaultBullets.id }),
-      ))!;
-
-      await db
-        .update(resumeBullets)
-        .set({ sourceBulletId: created.id })
-        .where(eq(resumeBullets.id, b.id));
+      await copyBulletToVault(b, target.id);
     }
 
-    await db
-      .update(resumeEntries)
-      .set({ sourceEntryId: vaultRow.id })
-      .where(eq(resumeEntries.id, resumeEntryId));
-
-    revalidatePath(`/resume/${section.resumeId}`);
+    if (target.resumeId) revalidatePath(`/resume/${target.resumeId}`);
     revalidatePath("/vault");
-    return { ok: true, data: vaultRow.id };
+    return { ok: true, data: target.id };
   });
 }
 
@@ -319,52 +363,39 @@ export async function addManualBullet(
   });
 }
 
-/** Copy a resume bullet into its entry's vault record and link them. */
-export async function saveBulletToVault(resumeBulletId: number): Promise<ActionResult> {
+/**
+ * Save one resume bullet to the vault.
+ *
+ * If its entry isn't in the vault yet, the entry is created there first —
+ * fields only, without its other bullets — so a single good line can be kept
+ * without committing the whole entry.
+ */
+export async function saveBulletToVault(
+  resumeBulletId: number,
+): Promise<ActionResult<{ vaultBulletId: number; entryCreated: boolean }>> {
   return withVault(async () => {
     const bullet = await first(
       db.select().from(resumeBullets).where(eq(resumeBullets.id, resumeBulletId)),
     );
-    if (!bullet?.text?.trim()) return fail("Bullet not found");
-    if (bullet.sourceBulletId) return { ok: true };
+    if (!bullet?.text?.trim()) return fail("Write something in this line first");
+    if (bullet.sourceBulletId) {
+      return { ok: true, data: { vaultBulletId: bullet.sourceBulletId, entryCreated: false } };
+    }
 
     const entry = await first(
       db.select().from(resumeEntries).where(eq(resumeEntries.id, bullet.resumeEntryId)),
     );
-    if (!entry?.sourceEntryId) {
-      return fail("This entry isn't in your vault yet — save the entry first");
-    }
+    if (!entry) return fail("Entry not found");
 
-    const last = await first(
-      db
-        .select({ o: vaultBullets.displayOrder })
-        .from(vaultBullets)
-        .where(eq(vaultBullets.entryId, entry.sourceEntryId))
-        .orderBy(desc(vaultBullets.displayOrder)),
-    );
+    const entryCreated = !entry.sourceEntryId;
+    const target = await ensureVaultEntryFor(entry);
+    if (!target.ok) return target;
 
-    const created = (await first(
-      db
-        .insert(vaultBullets)
-        .values({
-          entryId: entry.sourceEntryId,
-          text: bullet.text,
-          strength: bulletStrength(bullet.text),
-          displayOrder: (last?.o ?? -1) + 1,
-        })
-        .returning({ id: vaultBullets.id }),
-    ))!;
+    const vaultBulletId = await copyBulletToVault(bullet, target.id);
 
-    await db
-      .update(resumeBullets)
-      .set({ sourceBulletId: created.id })
-      .where(eq(resumeBullets.id, resumeBulletId));
-
-    const resumeId = await resumeIdForSection(entry.sectionId);
-    if (resumeId) revalidatePath(`/resume/${resumeId}`);
+    if (target.resumeId) revalidatePath(`/resume/${target.resumeId}`);
     revalidatePath("/vault");
-
-    return { ok: true };
+    return { ok: true, data: { vaultBulletId, entryCreated } };
   });
 }
 
@@ -423,11 +454,17 @@ export async function bulletOptionsForEntry(
   });
 }
 
-/** Attach an existing vault bullet to a resume entry. */
+/**
+ * Attach an existing vault bullet to a resume entry.
+ *
+ * Returns the resume bullet's id and text, so the rich-text editor can add it
+ * as a line it already knows — otherwise its next save would treat the row as
+ * unseen. Callers that only need success ignore the data.
+ */
 export async function addVaultBulletToEntry(
   resumeEntryId: number,
   vaultBulletId: number,
-): Promise<ActionResult> {
+): Promise<ActionResult<{ id: number; text: string; sourceBulletId: number }>> {
   return withVault(async () => {
     const bullet = await first(
       db.select().from(vaultBullets).where(eq(vaultBullets.id, vaultBulletId)),
@@ -450,7 +487,12 @@ export async function addVaultBulletToEntry(
           ),
         ),
     );
-    if (duplicate) return { ok: true };
+    if (duplicate) {
+      return {
+        ok: true,
+        data: { id: duplicate.id, text: duplicate.text ?? bullet.text, sourceBulletId: vaultBulletId },
+      };
+    }
 
     const last = await first(
       db
@@ -460,16 +502,21 @@ export async function addVaultBulletToEntry(
         .orderBy(desc(resumeBullets.displayOrder)),
     );
 
-    await db.insert(resumeBullets).values({
-      resumeEntryId,
-      sourceBulletId: vaultBulletId,
-      text: bullet.text,
-      displayOrder: (last?.o ?? -1) + 1,
-    });
+    const row = (await first(
+      db
+        .insert(resumeBullets)
+        .values({
+          resumeEntryId,
+          sourceBulletId: vaultBulletId,
+          text: bullet.text,
+          displayOrder: (last?.o ?? -1) + 1,
+        })
+        .returning({ id: resumeBullets.id }),
+    ))!;
 
     const resumeId = await resumeIdForSection(entry.sectionId);
     if (resumeId) revalidatePath(`/resume/${resumeId}`);
 
-    return { ok: true };
+    return { ok: true, data: { id: row.id, text: bullet.text, sourceBulletId: vaultBulletId } };
   });
 }

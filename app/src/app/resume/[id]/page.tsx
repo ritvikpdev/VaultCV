@@ -4,7 +4,7 @@ import { ArrowLeft } from "lucide-react";
 
 import { hasApiKey } from "@/db/ai-config";
 import { allGroups, allSections, allSkills } from "@/db/queries";
-import { getResumeFull, vaultOptionsForResume } from "@/db/resume-queries";
+import { getResumeFull, listResumes, vaultOptionsForResume } from "@/db/resume-queries";
 import { withVault } from "@/db/session";
 import { buildVaultIndex, formatPath, pathOfSection } from "@/lib/vault-path";
 
@@ -30,17 +30,18 @@ export default async function ResumePage({
   const loaded = await withVault(async () => {
     const resume = await getResumeFull(resumeId);
     if (!resume) return null;
-    const [opts, sections, skills, groups, keyPresent] = await Promise.all([
+    const [opts, sections, skills, groups, keyPresent, resumes] = await Promise.all([
       vaultOptionsForResume(resume.sections.map((s) => s.id)),
       allSections(),
       allSkills(),
       allGroups(),
       hasApiKey(),
+      listResumes(),
     ]);
-    return { resume, opts, sections, skills, groups, keyPresent };
+    return { resume, opts, sections, skills, groups, keyPresent, resumes };
   });
   if (!loaded) notFound();
-  const { resume, opts, sections, skills, groups, keyPresent } = loaded;
+  const { resume, opts, sections, skills, groups, keyPresent, resumes } = loaded;
 
   // "Group → Section" for every vault item the editor might mention.
   const vaultIndex = buildVaultIndex({
@@ -80,8 +81,8 @@ export default async function ResumePage({
   };
 
   return (
-    <div className="space-y-5">
-      <div>
+    <div>
+      <div className="space-y-2">
         <Link href="/" className="hint inline-flex items-center gap-1 hover:text-ink">
           <ArrowLeft size={14} /> My Resumes
         </Link>
@@ -90,6 +91,8 @@ export default async function ResumePage({
           name={resume.name}
           targetRole={resume.targetRole}
           targetCompany={resume.targetCompany}
+          resumes={resumes.map((r) => ({ id: r.id, name: r.name }))}
+          activeTab={activeTab}
         />
       </div>
 

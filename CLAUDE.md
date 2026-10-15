@@ -211,17 +211,45 @@ Dev machines are **Windows**; production is Vercel + Supabase.
   Reordering is drag-only at every level. Don't reintroduce up/down
   arrows alongside it — the same icon meaning two things depending on the row is
   how misclicks get trained.
-- **Section order lives in Customize; Content has no move controls.** Content
-  reorders entries and bullets by drag and folds sections with a chevron, but
-  can't move a section. `moveSection` survives as an adjacent swap with exactly
-  one caller — the tuner's REORDER recommendation — so don't delete it as
-  unused. Resume entries drag only within their section, because sections are
-  typed and a job under EDUCATION renders wrong.
+- **Sections reorder by drag in both Content and Customize.** This used to be
+  Customize-only; the FlowCV-style Content list made section cards draggable
+  by their grip too, through the same `reorderResumeSections`. `moveSection`
+  survives as an adjacent swap with exactly one caller — the tuner's REORDER
+  recommendation — so don't delete it as unused. Resume entries drag only
+  within their section, because sections are typed and a job under EDUCATION
+  renders wrong.
 - **Resume skill categories are derived, not stored.** `resume_skills` holds one
   row per skill carrying a category string; the renderer groups them. Editing a
   category means editing a set of rows, and the save diffs by name
   (`src/lib/skill-category.ts`) so rows keep their `source_skill_id` — a
   blanket delete-and-reinsert would sever every vault link on a typo fix.
+
+### The resume editor
+
+- **Content edits go to a working copy first.** `useResumeDraft`
+  (`resume/[id]/draft.tsx`) holds the resume the preview renders from; every
+  keystroke updates it on the same frame and a serial save queue persists it
+  behind. The writes in `resume/editor-actions.ts` take the state the user
+  arrived at (set, not toggle) and don't revalidate — the draft already shows
+  the result. Structural actions (vault pull, add section/entry) still
+  revalidate, and fresh server data is merged in by `lib/draft-merge.ts`:
+  server first, locally edited ("dirty") fields put back. Don't make the
+  preview read server props directly again, and don't add a draft write that
+  revalidates — it re-fetches the whole vault to learn nothing.
+- **A description is its bullets.** The Tiptap editor's document is `line+`,
+  one line per `resume_bullets` row (`syncEntryBullets`), so vault links,
+  strength scores and the tuner keep working per bullet. Formatting is stored
+  in `resume_bullets.html` — the allowlist in `lib/rich-text.ts` (strong, em,
+  u, http/https/mailto links) — and `text` is always written as its plain
+  twin. Everything except the renderer reads `text`; the renderer sanitises
+  `html` again before printing it. Tiptap is the one editor dependency, pinned
+  to an exact version.
+- **Per-section options default to the original look.** `resume_sections.options`
+  is `{}` on old rows and `sectionOptions()` fills defaults that reproduce how
+  resumes printed before options existed. Section icons are editor chrome
+  only; printed headings stay plain text.
+- **Personal details are the shared profile**, edited from inside a resume
+  (`updateProfileDetails`). The editor says so; there is no per-resume copy.
 
 ---
 

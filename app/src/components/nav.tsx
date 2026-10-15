@@ -27,8 +27,8 @@ export function Nav({ user }: { user: { email: string; isAdmin: boolean } | null
     : [];
 
   return (
-    <header className="no-print sticky top-0 z-20 border-b border-line bg-surface/80 backdrop-blur">
-      <nav className="mx-auto flex h-14 max-w-6xl items-center gap-1 px-6">
+    <header className="no-print sticky top-0 z-20 bg-canvas/80 px-4 pt-3 backdrop-blur sm:px-6">
+      <nav className="mx-auto flex h-14 max-w-6xl items-center gap-1 rounded-card border border-line/70 bg-surface px-4 shadow-card">
         <Link href="/" className="mr-4 text-base font-semibold tracking-tight">
           vault<span className="text-accent">CV</span>
         </Link>

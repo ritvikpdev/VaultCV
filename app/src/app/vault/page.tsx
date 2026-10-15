@@ -9,6 +9,7 @@ import {
   type SearchHit,
 } from "@/db/queries";
 import { SectionPath } from "@/components/section-path";
+import { getSetting, SETTING_KEYS } from "@/db/bootstrap";
 import { withVault } from "@/db/session";
 import { STRENGTH_COLORS } from "@/lib/bullet-strength";
 import { cn } from "@/lib/utils";
@@ -29,14 +30,24 @@ export default async function VaultPage({
   const params = await searchParams;
   const query = params.q?.trim() ?? "";
 
-  const { blocks, groups, counts, hits } = await withVault(async () => ({
+  const { blocks, groups, counts, hits, clearedRaw } = await withVault(async () => ({
     blocks: await vaultBlocks(),
     groups: await allGroups(),
     counts: await entryCountsBySection(),
     // Loaded here rather than inside <SearchResults>: a child component renders
     // after this function returns, outside the vault scope.
     hits: query ? await searchVault(query) : [],
+    clearedRaw: await getSetting(SETTING_KEYS.dismissedAttention),
   }));
+
+  // Reminders the user cleared on the overview. A bad value means none.
+  let cleared = new Set<string>();
+  try {
+    const parsed = JSON.parse(clearedRaw ?? "[]");
+    if (Array.isArray(parsed)) cleared = new Set(parsed.filter((k): k is string => typeof k === "string"));
+  } catch {
+    cleared = new Set();
+  }
 
   // The sidebar only draws headings and counts, so entries and their bullets
   // are stripped before crossing to the client. Sending the whole vault to
@@ -101,6 +112,7 @@ export default async function VaultPage({
               blocks.flatMap((b) =>
                 b.sections.map((s) => ({ ...s, groupName: b.group?.name ?? null })),
               ),
+              cleared,
             )}
             blocks={blocks}
           />

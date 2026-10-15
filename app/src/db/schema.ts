@@ -91,6 +91,24 @@ export const profile = pgTable(
       .default(sql`'[]'::jsonb`),
     /** Default professional summary. Resumes may override per-application. */
     summary: text("summary").notNull().default(""),
+    /** "Software Engineer" — printed under the name when set. */
+    title: text("title").notNull().default(""),
+    /**
+     * Extra header facts from the "+ Label" chips: Nationality, Visa, GitHub…
+     * A value that looks like a URL prints as a link.
+     */
+    details: jsonb("details")
+      .$type<Array<{ label: string; value: string }>>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    /**
+     * Order of the contact line under the name, as group keys. Empty means the
+     * order it always had: email, phone, location, links, then details.
+     */
+    contactOrder: jsonb("contact_order")
+      .$type<ContactKey[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     createdAt: epoch("created_at").notNull().default(now),
     updatedAt: epoch("updated_at").notNull().default(now),
   },
@@ -175,6 +193,31 @@ export const SECTION_TYPES = [
   "custom",
 ] as const;
 export type SectionType = (typeof SECTION_TYPES)[number];
+
+/** One group of the contact line under the name. */
+export type ContactKey = "email" | "phone" | "location" | "links" | "details";
+
+/**
+ * Per-section layout choices, all optional. A missing key is the default —
+ * which is how every resume looked before these existed — so `{}` from an
+ * old row renders exactly as before. Read through `sectionOptions()`.
+ */
+export type SectionOptions = {
+  /** Entry title line: title first ("Engineer, Acme") or organisation first. */
+  titleOrder?: "title-first" | "org-first";
+  /**
+   * How title and organisation join: "comma" (default) · "dash" ("Engineer –
+   * Acme") · "stacked" (organisation in italics on its own line, the usual
+   * education layout).
+   */
+  titleJoin?: "comma" | "dash" | "stacked";
+  /**
+   * Skill sections: "lines" (default — one line per category, "Category —
+   * a | b") · "colon" ("Category: a, b") · "bullets" (each line a bullet) ·
+   * "inline" (every category in one paragraph).
+   */
+  skillsLayout?: "lines" | "colon" | "bullets" | "inline";
+};
 
 /**
  * One thing you did: a job, a degree, a project, a paper, a certification.
@@ -399,6 +442,21 @@ export const resumeSections = pgTable(
     isVisible: boolean("is_visible").notNull().default(true),
     /** Insert a hard page break after this section. */
     pageBreakAfter: boolean("page_break_after").notNull().default(false),
+    /**
+     * Lucide icon name shown beside the heading in the editor. NULL means the
+     * section type's default. Editor chrome only — the printed heading stays
+     * plain text, per the single-column/standard-headings rule.
+     */
+    icon: text("icon"),
+    /**
+     * Per-section layout choices from "Show customizations for this section"
+     * (title order, skills layout). `{}` means every default, which is the
+     * look resumes had before these existed — see `sectionOptions()`.
+     */
+    options: jsonb("options")
+      .$type<SectionOptions>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
   },
   (t) => [
     ownRows(),
@@ -432,6 +490,14 @@ export const resumeEntries = pgTable(
     locationOverride: text("location_override"),
     startDateOverride: text("start_date_override"),
     endDateOverride: text("end_date_override"),
+    /**
+     * The three fields that had no per-resume override until the editor could
+     * change them. NULL reads through to the vault entry, like every other
+     * override; hand-typed entries (no source) set them directly.
+     */
+    isCurrentOverride: boolean("is_current_override"),
+    urlOverride: text("url_override"),
+    metaOverride: jsonb("meta_override").$type<Record<string, unknown>>(),
     displayOrder: integer("display_order").notNull().default(0),
     isVisible: boolean("is_visible").notNull().default(true),
   },
@@ -473,6 +539,17 @@ export const resumeBullets = pgTable(
     }),
     /** Snapshot mode: always set. Linked mode: NULL means "read from vault". */
     text: text("text"),
+    /**
+     * The formatted version from the rich-text editor — a sanitised subset of
+     * HTML (strong, em, u, a). NULL means plain `text`. `text` is always kept
+     * as the plain-text equivalent, so the tuner, strength scoring, similarity
+     * and save-to-vault never see markup.
+     */
+    html: text("html"),
+    /** left | center | right | justify. NULL is left. */
+    align: text("align"),
+    /** A plain paragraph line rather than a bullet point. */
+    isParagraph: boolean("is_paragraph").notNull().default(false),
     displayOrder: integer("display_order").notNull().default(0),
     isVisible: boolean("is_visible").notNull().default(true),
   },

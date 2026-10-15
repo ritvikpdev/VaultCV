@@ -26,6 +26,12 @@ export const SETTING_KEYS = {
    * whole switch.
    */
   vaultLinkMode: "vault_link_mode",
+  /**
+   * JSON string[] of "Needs attention" items the user cleared on the vault
+   * overview — `AttentionItem.key` values. Clearing hides the reminder; it
+   * never touches the entry it points at.
+   */
+  dismissedAttention: "dismissed_attention",
   /** Have we run the welcome flow. */
   onboarded: "onboarded",
   /**

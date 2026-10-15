@@ -6,7 +6,7 @@ import { z } from "zod";
 
 import { db, first } from "@/db/client";
 import { withVault } from "@/db/session";
-import { setSetting, SETTING_KEYS } from "@/db/bootstrap";
+import { deleteSetting, getSetting, setSetting, SETTING_KEYS } from "@/db/bootstrap";
 import { vaultBullets, vaultEntries, vaultGroups, vaultSections, vaultSkills } from "@/db/schema";
 import { bulletStrength } from "@/lib/bullet-strength";
 import { extractSkills } from "@/lib/skill-index";
@@ -25,6 +25,48 @@ function touch() {
 function refresh() {
   revalidatePath("/vault");
   revalidatePath("/");
+}
+
+/* ------------------------------------------------------------------ */
+/* Overview — clearing "Needs attention" reminders                     */
+/* ------------------------------------------------------------------ */
+
+/** The cleared reminder keys, as stored. Unreadable values count as none. */
+async function clearedKeys(): Promise<string[]> {
+  try {
+    const parsed = JSON.parse((await getSetting(SETTING_KEYS.dismissedAttention)) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((k): k is string => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Hide one "Needs attention" reminder. Only the reminder — the entry, bullet
+ * or section it points at is untouched, so there is nothing to confirm.
+ */
+export async function clearAttentionItem(key: string): Promise<ActionResult> {
+  return withVault(async () => {
+    const parsed = z.string().trim().min(1).max(80).regex(/^[a-z-]+:\d+$/).safeParse(key);
+    if (!parsed.success) return fail("Unknown reminder");
+
+    const keys = await clearedKeys();
+    if (!keys.includes(parsed.data)) keys.push(parsed.data);
+    // Bounded: keys for problems since fixed are never generated again, so the
+    // oldest can go without anything reappearing that shouldn't.
+    await setSetting(SETTING_KEYS.dismissedAttention, JSON.stringify(keys.slice(-500)));
+    refresh();
+    return { ok: true };
+  });
+}
+
+/** Bring every cleared reminder back. */
+export async function restoreAttentionItems(): Promise<ActionResult> {
+  return withVault(async () => {
+    await deleteSetting(SETTING_KEYS.dismissedAttention);
+    refresh();
+    return { ok: true };
+  });
 }
 
 /* ------------------------------------------------------------------ */

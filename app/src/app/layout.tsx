@@ -1,9 +1,15 @@
 import type { Metadata } from "next";
+import { Inter } from "next/font/google";
 
 import { Nav } from "@/components/nav";
 import { getSessionUser, isAdmin, type SessionUser } from "@/db/session";
 
 import "./globals.css";
+
+// Self-hosted by next/font at build time — no request to Google from the
+// browser, and no layout shift while it loads. Exposed as a CSS variable so
+// tailwind's `font-sans` picks it up; the resume document keeps its own fonts.
+const inter = Inter({ subsets: ["latin"], variable: "--font-ui", display: "swap" });
 
 export const metadata: Metadata = {
   title: "vaultCV",
@@ -21,7 +27,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   }
 
   return (
-    <html lang="en">
+    <html lang="en" className={inter.variable}>
       <body>
         <Nav user={user ? { email: user.email, isAdmin: isAdmin(user) } : null} />
         <main className="mx-auto max-w-6xl px-6 py-8">{children}</main>

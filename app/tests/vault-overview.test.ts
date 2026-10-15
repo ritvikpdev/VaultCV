@@ -107,6 +107,18 @@ describe("summarizing the vault", () => {
     assert.ok(overview.attention.every((a) => a.groupName === "Work" || a.groupName === "Skills"));
   });
 
+  test("cleared items are hidden and counted, and only those", () => {
+    const keys = overview.attention.map((a) => a.key);
+    assert.equal(new Set(keys).size, keys.length, "keys are unique");
+
+    const weak = overview.attention.find((a) => a.kind === "weak-bullet")!;
+    const after = summarizeVault(sections, new Set([weak.key, "no-bullets:999"]));
+    assert.equal(after.attention.length, overview.attention.length - 1);
+    assert.ok(!after.attention.some((a) => a.key === weak.key));
+    // A stale key for something no longer flagged changes nothing.
+    assert.equal(after.cleared, 1);
+  });
+
   test("an empty vault is all zeroes and no flags", () => {
     const empty = summarizeVault([]);
     assert.equal(empty.totals.entries, 0);
