@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 
+import { SectionPath } from "@/components/section-path";
 import { ConfirmButton } from "@/components/ui";
 import type { EntryWithBullets } from "@/db/queries";
 import type { VaultSection } from "@/db/schema";
@@ -106,11 +107,14 @@ function Detail({
 export function EntryPanel({
   entry,
   section,
+  groupName,
   moveTargets,
   onClose,
 }: {
   entry: EntryWithBullets;
   section: VaultSection;
+  /** The section's group, for the header path. Null for a pre-groups section. */
+  groupName: string | null;
   moveTargets: MoveTargetGroup[];
   onClose: () => void;
 }) {
@@ -153,9 +157,10 @@ export function EntryPanel({
         className="absolute inset-y-0 right-0 flex w-full max-w-xl animate-slide-in flex-col bg-surface shadow-panel"
       >
         <header className="flex items-center justify-between gap-3 border-b border-line px-6 py-3">
-          <p className="min-w-0 truncate text-xs font-medium uppercase tracking-wide text-muted">
-            {section.heading}
-          </p>
+          <SectionPath
+            path={{ group: groupName, section: section.heading }}
+            className="text-xs"
+          />
           <div className="flex items-center gap-3">
             <SaveIndicator state={state} error={error} />
             <button

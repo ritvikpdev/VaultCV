@@ -62,7 +62,7 @@ export function MoveEntryDialog({
         {targets.map((group) => (
           <div key={group.groupName ?? "__ungrouped"}>
             <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
-              {group.groupName ?? "Ungrouped"}
+              {group.groupName ?? "Not in a group"}
             </p>
             <div className="space-y-1">
               {group.sections.map((s) => (

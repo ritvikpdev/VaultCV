@@ -8,6 +8,7 @@ import {
   vaultBlocks,
   type SearchHit,
 } from "@/db/queries";
+import { SectionPath } from "@/components/section-path";
 import { withVault } from "@/db/session";
 import { STRENGTH_COLORS } from "@/lib/bullet-strength";
 import { cn } from "@/lib/utils";
@@ -85,13 +86,24 @@ export default async function VaultPage({
         />
 
         {query ? (
-          <SearchResults query={query} hits={hits} />
+          <SearchResults
+            query={query}
+            hits={hits}
+            groupNames={Object.fromEntries(groups.map((g) => [g.id, g.name]))}
+          />
         ) : active ? (
           // Keyed so per-section UI state (an open "add" tile) doesn't follow
           // you into the next section.
           <SectionView key={active.id} section={active} groups={groups} moveTargets={moveTargets} />
         ) : sections.length > 0 ? (
-          <VaultOverviewView overview={summarizeVault(sections)} sections={sections} />
+          <VaultOverviewView
+            overview={summarizeVault(
+              blocks.flatMap((b) =>
+                b.sections.map((s) => ({ ...s, groupName: b.group?.name ?? null })),
+              ),
+            )}
+            blocks={blocks}
+          />
         ) : (
           <div className="card flex min-h-64 flex-1 flex-col items-center justify-center border-dashed p-10 text-center">
             <p className="font-medium">Your vault is empty</p>
@@ -109,7 +121,15 @@ export default async function VaultPage({
   );
 }
 
-function SearchResults({ query, hits }: { query: string; hits: SearchHit[] }) {
+function SearchResults({
+  query,
+  hits,
+  groupNames,
+}: {
+  query: string;
+  hits: SearchHit[];
+  groupNames: Record<number, string>;
+}) {
   const bulletHits = hits.reduce((n, h) => n + h.bullets.length, 0);
 
   return (
@@ -148,9 +168,14 @@ function SearchResults({ query, hits }: { query: string; hits: SearchHit[] }) {
               </Link>
               <Link
                 href={`/vault?section=${section.id}`}
-                className="shrink-0 rounded-full bg-canvas px-2 py-0.5 text-xs font-medium text-muted hover:bg-accentSoft hover:text-accent"
+                className="flex min-w-0 shrink-0 rounded-full bg-canvas px-2 py-0.5 text-xs hover:bg-accentSoft"
               >
-                {section.heading}
+                <SectionPath
+                  path={{
+                    group: section.groupId === null ? null : (groupNames[section.groupId] ?? null),
+                    section: section.heading,
+                  }}
+                />
               </Link>
             </div>
 

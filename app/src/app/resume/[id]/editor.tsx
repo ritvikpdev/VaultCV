@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { PagedResume } from "@/components/paged-resume";
 import type { ResumeStyle } from "@/db/schema";
 import type { ResolvedResume } from "@/lib/resume-model";
+import type { VaultIndex } from "@/lib/vault-path";
 
 import { updateResumeStyle, type StylePatch } from "../style-actions";
 import {
@@ -15,6 +16,7 @@ import {
 } from "./content-tab";
 import { CustomizeTab } from "./customize-tab";
 import { TuneTab } from "./tune-tab";
+import { VaultIndexProvider } from "./vault-index-context";
 
 export type Tab = "content" | "customize" | "tune";
 
@@ -40,12 +42,14 @@ export function ResumeEditor({
   resume,
   vaultData,
   vaultSkills,
+  vaultIndex,
   activeTab,
   hasApiKey,
 }: {
   resume: ResolvedResume;
   vaultData: SectionVaultData;
   vaultSkills: VaultSkillContext;
+  vaultIndex: VaultIndex;
   activeTab: Tab;
   hasApiKey: boolean;
 }) {
@@ -117,28 +121,30 @@ export function ResumeEditor({
 
       <div className="mt-5 flex gap-6">
         <div className="w-[420px] shrink-0">
-          {activeTab === "content" && (
-            <ContentTab
-              resume={resume}
-              vaultData={vaultData}
-              vaultSkills={vaultSkills}
-            />
-          )}
+          <VaultIndexProvider index={vaultIndex}>
+            {activeTab === "content" && (
+              <ContentTab
+                resume={resume}
+                vaultData={vaultData}
+                vaultSkills={vaultSkills}
+              />
+            )}
 
-          {activeTab === "customize" && (
-            <CustomizeTab
-              resumeId={resume.id}
-              sections={resume.sections}
-              style={style}
-              pages={pages}
-              onChange={applyStyle}
-              onCommit={commitStyle}
-            />
-          )}
+            {activeTab === "customize" && (
+              <CustomizeTab
+                resumeId={resume.id}
+                sections={resume.sections}
+                style={style}
+                pages={pages}
+                onChange={applyStyle}
+                onCommit={commitStyle}
+              />
+            )}
 
-          {activeTab === "tune" && (
-            <TuneTab resumeId={resume.id} hasApiKey={hasApiKey} />
-          )}
+            {activeTab === "tune" && (
+              <TuneTab resumeId={resume.id} hasApiKey={hasApiKey} />
+            )}
+          </VaultIndexProvider>
         </div>
 
         {/* Live preview — real page sheets. /print/[id] renders the same blocks

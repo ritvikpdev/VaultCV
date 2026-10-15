@@ -24,16 +24,25 @@ type OverviewEntry = {
   bullets: OverviewBullet[];
 };
 
-type OverviewSection = { id: number; heading: string; type: string; entries: OverviewEntry[] };
+type OverviewSection = {
+  id: number;
+  heading: string;
+  type: string;
+  /** Null for a section filed before every section needed a group. */
+  groupName: string | null;
+  entries: OverviewEntry[];
+};
 
-export type AttentionKind = "no-bullets" | "no-skills" | "weak-bullet" | "no-dates";
+export type AttentionKind = "no-group" | "no-bullets" | "no-skills" | "weak-bullet" | "no-dates";
 
 export type AttentionItem = {
   kind: AttentionKind;
   sectionId: number;
   sectionHeading: string;
-  entryId: number;
-  entryTitle: string;
+  groupName: string | null;
+  /** Absent for `no-group`, which is about the section rather than an entry in it. */
+  entryId?: number;
+  entryTitle?: string;
   /** The bullet text, for a weak bullet. */
   detail?: string;
   /** The bullet's score, for a weak bullet — weakest are listed first. */
@@ -52,12 +61,16 @@ export type VaultOverview = {
 /** At or below this a bullet is flagged. Matches the "Weak" label. */
 export const WEAK_BULLET_MAX = 2;
 
-/** Empty entries first — they are the most obviously unfinished — then weak writing, then dates. */
+/**
+ * Unfiled sections first — the app requires a group and these predate that —
+ * then empty entries, the most obviously unfinished, then weak writing, then dates.
+ */
 const KIND_ORDER: Record<AttentionKind, number> = {
-  "no-bullets": 0,
-  "no-skills": 1,
-  "weak-bullet": 2,
-  "no-dates": 3,
+  "no-group": 0,
+  "no-bullets": 1,
+  "no-skills": 2,
+  "weak-bullet": 3,
+  "no-dates": 4,
 };
 
 export function summarizeVault(sections: OverviewSection[]): VaultOverview {
@@ -71,12 +84,17 @@ export function summarizeVault(sections: OverviewSection[]): VaultOverview {
 
   for (const section of sections) {
     const isSkill = section.type === "skill";
+    const place = {
+      sectionId: section.id,
+      sectionHeading: section.heading,
+      groupName: section.groupName,
+    };
+    if (section.groupName === null) attention.push({ kind: "no-group", ...place });
 
     for (const entry of section.entries) {
       entries += 1;
       const where = {
-        sectionId: section.id,
-        sectionHeading: section.heading,
+        ...place,
         entryId: entry.id,
         entryTitle: entry.title,
       };

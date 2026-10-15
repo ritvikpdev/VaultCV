@@ -3,10 +3,14 @@
 import { useState, useTransition } from "react";
 import { Check, ChevronLeft } from "lucide-react";
 
+import { SectionPath } from "@/components/section-path";
 import { Modal, StrengthMeter } from "@/components/ui";
 import type { VaultBullet, VaultEntry, VaultSection, VaultSkill } from "@/db/schema";
 
+import { formatPath, pathOfSection } from "@/lib/vault-path";
+
 import { pullEntryFromVault, pullSkillsFromVault } from "../actions";
+import { useVaultIndex } from "./vault-index-context";
 
 export type VaultEntryOption = VaultEntry & { bullets: VaultBullet[] };
 export type VaultSkillOption = VaultSkill & { sectionId: number | null };
@@ -49,6 +53,7 @@ export function VaultPicker({
 }) {
   const used = new Set(usedEntryIds);
   const usedSkills = new Set(usedSkillIds);
+  const index = useVaultIndex();
 
   const [activeSectionId, setActiveSectionId] = useState<number | null>(null);
 
@@ -100,6 +105,16 @@ export function VaultPicker({
       : entries.some((e) => e.sectionId === vs.id),
   );
 
+  // Sections under their groups. `vaultSections` arrive in sidebar order, so
+  // first-seen order of each group reproduces the sidebar's group order.
+  const byGroup: Array<{ group: string | null; sections: VaultSection[] }> = [];
+  for (const vs of relevantSections) {
+    const group = pathOfSection(index, vs.id)?.group ?? null;
+    const bucket = byGroup.find((b) => b.group === group);
+    if (bucket) bucket.sections.push(vs);
+    else byGroup.push({ group, sections: [vs] });
+  }
+
   if (activeSectionId === null) {
     return (
       <Modal open={open} onClose={close} title={`Add to ${sectionLabel} from vault`} wide>
@@ -109,29 +124,38 @@ export function VaultPicker({
             resume.
           </p>
         ) : (
-          <div className="space-y-1.5">
-            {relevantSections.map((vs) => {
-              const count =
-                layout === "skill"
-                  ? skills.filter((s) => s.sectionId === vs.id && !usedSkills.has(s.id))
-                      .length
-                  : entries.filter((e) => e.sectionId === vs.id).length;
+          <div className="space-y-5">
+            {byGroup.map(({ group, sections }) => (
+              <div key={group ?? "__ungrouped"}>
+                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  {group ?? "Not in a group"}
+                </p>
+                <div className="space-y-1.5">
+                  {sections.map((vs) => {
+                    const count =
+                      layout === "skill"
+                        ? skills.filter((s) => s.sectionId === vs.id && !usedSkills.has(s.id))
+                            .length
+                        : entries.filter((e) => e.sectionId === vs.id).length;
 
-              return (
-                <button
-                  key={vs.id}
-                  onClick={() => setActiveSectionId(vs.id)}
-                  className="flex w-full items-center justify-between rounded-lg border border-line px-3 py-2.5 text-left text-sm transition-colors hover:border-accent hover:bg-accentSoft"
-                >
-                  <span className="font-medium">{vs.heading}</span>
-                  <span className="text-xs text-muted">
-                    {layout === "skill"
-                      ? `${count} available`
-                      : `${count} ${count === 1 ? "entry" : "entries"}`}
-                  </span>
-                </button>
-              );
-            })}
+                    return (
+                      <button
+                        key={vs.id}
+                        onClick={() => setActiveSectionId(vs.id)}
+                        className="flex w-full items-center justify-between rounded-lg border border-line px-3 py-2.5 text-left text-sm transition-colors hover:border-accent hover:bg-accentSoft"
+                      >
+                        <span className="font-medium">{vs.heading}</span>
+                        <span className="text-xs text-muted">
+                          {layout === "skill"
+                            ? `${count} available`
+                            : `${count} ${count === 1 ? "entry" : "entries"}`}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -145,13 +169,24 @@ export function VaultPicker({
   }
 
   const activeSection = vaultSections.find((vs) => vs.id === activeSectionId);
+  const activePath = pathOfSection(index, activeSectionId);
+  const fromLabel = activePath ? formatPath(activePath) : (activeSection?.heading ?? "vault");
   const backButton = (
-    <button
-      onClick={() => setActiveSectionId(null)}
-      className="hint mb-4 flex items-center gap-1 hover:text-ink"
-    >
-      <ChevronLeft size={14} /> Back to sections
-    </button>
+    <>
+      <button
+        onClick={() => setActiveSectionId(null)}
+        className="hint mb-4 flex items-center gap-1 hover:text-ink"
+      >
+        <ChevronLeft size={14} /> Back to sections
+      </button>
+      {/* Group first: "SDE Experience" alone doesn't say which group it's in. */}
+      {activePath && (
+        <p className="-mt-2 mb-4 flex items-center gap-1.5 text-xs">
+          <span className="text-muted">Pulling from</span>
+          <SectionPath path={activePath} tone="ink" />
+        </p>
+      )}
+    </>
   );
 
   if (layout === "skill") {
@@ -163,7 +198,7 @@ export function VaultPicker({
       <Modal
         open={open}
         onClose={close}
-        title={`Add skills from ${activeSection?.heading ?? "vault"}`}
+        title={`Add skills from ${fromLabel}`}
         wide
       >
         {backButton}
@@ -233,7 +268,7 @@ export function VaultPicker({
     <Modal
       open={open}
       onClose={close}
-      title={`Add to ${sectionLabel} from ${activeSection?.heading ?? "vault"}`}
+      title={`Add to ${sectionLabel} from ${fromLabel}`}
       wide
     >
       {backButton}

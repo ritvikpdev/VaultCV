@@ -14,6 +14,7 @@ import {
   vaultEntries,
   vaultSections,
 } from "@/db/schema";
+import { ensureGroupNamed } from "@/db/vault-groups";
 import { bulletStrength } from "@/lib/bullet-strength";
 import { normalizeTerm } from "@/lib/skill-aliases";
 
@@ -105,7 +106,13 @@ async function ensureVaultSection(heading: string, type: "normal" | "skill"): Pr
   return (await first(
     db
       .insert(vaultSections)
-      .values({ heading: heading.trim(), type, displayOrder: (last?.o ?? -1) + 1 })
+      .values({
+        heading: heading.trim(),
+        type,
+        // Every section needs a group; a new one gets a group of its own name.
+        groupId: await ensureGroupNamed(heading),
+        displayOrder: (last?.o ?? -1) + 1,
+      })
       .returning({ id: vaultSections.id }),
   ))!.id;
 }

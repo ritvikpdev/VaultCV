@@ -11,8 +11,10 @@ import {
   X,
 } from "lucide-react";
 
+import { SectionPath } from "@/components/section-path";
 import type { Recommendation } from "@/db/schema";
 import { cn } from "@/lib/utils";
+import { pathOfEntry, pathOfSection, pathOfSkill, type VaultPath } from "@/lib/vault-path";
 
 import {
   applyRecommendation,
@@ -20,6 +22,7 @@ import {
   setRecommendationStatus,
   type TuneResult,
 } from "../tune-actions";
+import { useVaultIndex } from "./vault-index-context";
 
 const TYPE_META: Record<
   Recommendation["type"],
@@ -63,6 +66,22 @@ export function TuneTab({
   const [error, setError] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, Recommendation["status"]>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
+  const vaultIndex = useVaultIndex();
+
+  /**
+   * Where in the vault a suggestion draws from, for "From Group → Section".
+   * Payloads are loosely typed JSON, so ids are checked rather than cast. Null
+   * for suggestions that don't come from the vault (reword, hide, reorder, or
+   * a skill spotted in your own bullet text).
+   */
+  function sourceOf(rec: Recommendation): VaultPath | null {
+    const id = (v: unknown) => (typeof v === "number" ? v : null);
+    return (
+      pathOfEntry(vaultIndex, id(rec.payload.vaultEntryId)) ??
+      pathOfSection(vaultIndex, id(rec.payload.vaultSectionId)) ??
+      pathOfSkill(vaultIndex, id(rec.payload.vaultSkillId))
+    );
+  }
   const [pending, startTransition] = useTransition();
 
   function analyze() {
@@ -269,6 +288,7 @@ export function TuneTab({
             const meta = TYPE_META[rec.type];
             const Icon = meta.icon;
             const why = String(rec.payload.why ?? "");
+            const source = sourceOf(rec);
 
             return (
               <div key={rec.id} className="card p-4">
@@ -284,6 +304,13 @@ export function TuneTab({
                   </span>
                   <p className="flex-1 text-sm leading-snug">{rec.label}</p>
                 </div>
+
+                {source && (
+                  <p className="mt-1.5 flex min-w-0 items-center gap-1 text-[11px]">
+                    <span className="shrink-0 text-muted">From</span>
+                    <SectionPath path={source} />
+                  </p>
+                )}
 
                 {why && (
                   <p className="hint mt-2 border-l-2 border-line pl-2">

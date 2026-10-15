@@ -15,6 +15,7 @@ import {
   Vault,
 } from "lucide-react";
 
+import { SectionPath } from "@/components/section-path";
 import { ConfirmButton, Modal } from "@/components/ui";
 import type { VaultSection } from "@/db/schema";
 import {
@@ -25,6 +26,7 @@ import {
 import { SECTION_DEFS, getSectionDef } from "@/lib/sections";
 import { useSortable, type SortableHandleProps } from "@/lib/use-sortable";
 import { cn } from "@/lib/utils";
+import { pathOfEntry } from "@/lib/vault-path";
 
 import {
   addSection,
@@ -42,6 +44,7 @@ import {
 } from "../actions";
 import { AddBullet } from "./add-bullet";
 import { ManualEntryDialog } from "./manual-entry-dialog";
+import { useVaultIndex } from "./vault-index-context";
 import {
   SkillCategoryDialog,
   type VaultSkillTarget,
@@ -185,6 +188,9 @@ function ResumeEntryCard({
   handle: SortableHandleProps;
 }) {
   const [, startTransition] = useTransition();
+  // Where in the vault this entry was pulled from, as it is filed now. Null for
+  // an entry typed straight into the resume, or one whose source was deleted.
+  const source = pathOfEntry(useVaultIndex(), entry.sourceEntryId);
 
   const bulletById = useMemo(
     () => new Map(entry.bullets.map((b) => [b.id, b])),
@@ -243,6 +249,12 @@ function ResumeEntryCard({
               .join(" – ")}
             {entry.location ? ` · ${entry.location}` : ""}
           </p>
+          {source && (
+            <p className="mt-1 flex min-w-0 items-center gap-1 text-[11px]">
+              <span className="shrink-0 text-muted">From</span>
+              <SectionPath path={source} />
+            </p>
+          )}
         </div>
 
         <div className="flex shrink-0 gap-0.5">

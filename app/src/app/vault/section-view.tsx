@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState, useTransition } from "react";
 import { useSearchParams } from "next/navigation";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { FolderOpen, FolderX, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { ConfirmButton } from "@/components/ui";
 import type { SectionWithEntries } from "@/db/queries";
@@ -31,6 +31,7 @@ export function SectionView({
   moveTargets,
 }: {
   section: SectionWithEntries;
+  /** Every group; the section's own is looked up from these. */
   groups: VaultGroup[];
   /** Where an entry in this section may be moved. Same kind only, this one excluded. */
   moveTargets: MoveTargetGroup[];
@@ -64,6 +65,7 @@ export function SectionView({
   }, []);
 
   const isSkill = section.type === "skill";
+  const groupName = groups.find((g) => g.id === section.groupId)?.name ?? null;
   const bulletCount = section.entries.reduce((n, e) => n + e.bullets.length, 0);
 
   const entryById = useMemo(
@@ -97,6 +99,18 @@ export function SectionView({
     <div className="min-w-0 flex-1 space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
+          {groupName ? (
+            <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted">
+              <FolderOpen size={13} /> {groupName}
+            </p>
+          ) : (
+            <button
+              className="mb-1 flex items-center gap-1.5 text-xs font-medium text-amber-700 hover:underline"
+              onClick={() => setEditOpen(true)}
+            >
+              <FolderX size={13} /> Not in a group — choose one
+            </button>
+          )}
           <div className="flex items-center gap-2">
             <h2 className="truncate text-2xl font-semibold tracking-tight">{section.heading}</h2>
             {isSkill && (
@@ -175,6 +189,7 @@ export function SectionView({
           key={openEntryData.id}
           entry={openEntryData}
           section={section}
+          groupName={groupName}
           moveTargets={moveTargets}
           onClose={closeEntry}
         />

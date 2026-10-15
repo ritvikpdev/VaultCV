@@ -4,6 +4,8 @@ import {
   CalendarX,
   CheckCircle2,
   FileText,
+  FolderOpen,
+  FolderX,
   Layers,
   ListX,
   Pin,
@@ -12,8 +14,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import type { SectionWithEntries } from "@/db/queries";
+import { SectionPath } from "@/components/section-path";
+import type { SectionWithEntries, VaultBlock } from "@/db/queries";
 import { STRENGTH_COLORS, STRENGTH_LABELS } from "@/lib/bullet-strength";
+import { cn } from "@/lib/utils";
 import type { AttentionItem, AttentionKind, VaultOverview } from "@/lib/vault-overview";
 
 /**
@@ -29,6 +33,11 @@ const BAR_MAX_PX = 112;
 const ATTENTION_VISIBLE = 6;
 
 const ATTENTION_COPY: Record<AttentionKind, { icon: LucideIcon; tone: string; text: (title: string) => string }> = {
+  "no-group": {
+    icon: FolderX,
+    tone: "bg-amber-50 text-amber-700",
+    text: (t) => `${t} isn’t in a group`,
+  },
   "no-bullets": {
     icon: ListX,
     tone: "bg-amber-50 text-amber-700",
@@ -68,22 +77,37 @@ function Stat({ icon: Icon, value, label }: { icon: LucideIcon; value: number; l
 function AttentionRow({ item }: { item: AttentionItem }) {
   const copy = ATTENTION_COPY[item.kind];
   const Icon = copy.icon;
+  const isSection = item.entryId === undefined;
+
   return (
     <li>
       <Link
-        href={`/vault?section=${item.sectionId}&entry=${item.entryId}`}
+        href={
+          isSection
+            ? `/vault?section=${item.sectionId}`
+            : `/vault?section=${item.sectionId}&entry=${item.entryId}`
+        }
         className="group flex items-start gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-canvas"
       >
         <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${copy.tone}`}>
           <Icon size={14} />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-sm font-medium">{copy.text(item.entryTitle)}</span>
-          {item.detail ? (
+          <span className="block text-sm font-medium">
+            {copy.text(isSection ? item.sectionHeading : (item.entryTitle ?? ""))}
+          </span>
+          {item.detail && (
             <span className="mt-0.5 block truncate text-xs text-muted">&ldquo;{item.detail}&rdquo;</span>
-          ) : (
-            <span className="mt-0.5 block text-xs text-muted">{item.sectionHeading}</span>
           )}
+          <span className="mt-0.5 flex text-xs">
+            {isSection ? (
+              <span className="text-muted">
+                Drag it into a group in the sidebar, or rename it to choose one
+              </span>
+            ) : (
+              <SectionPath path={{ group: item.groupName, section: item.sectionHeading }} />
+            )}
+          </span>
         </span>
         <ArrowRight
           size={14}
@@ -91,6 +115,90 @@ function AttentionRow({ item }: { item: AttentionItem }) {
         />
       </Link>
     </li>
+  );
+}
+
+function sectionSummary(s: SectionWithEntries): string {
+  if (s.type === "skill") {
+    return `${s.entries.length} skill ${s.entries.length === 1 ? "line" : "lines"}`;
+  }
+  const bullets = s.entries.reduce((n, e) => n + e.bullets.length, 0);
+  return `${s.entries.length} ${s.entries.length === 1 ? "entry" : "entries"} · ${bullets} ${bullets === 1 ? "bullet" : "bullets"}`;
+}
+
+/**
+ * One group and the sections filed in it. Groups lead because they are how
+ * the user thinks about their history ("Work Experience"); sections are the
+ * finer shelves inside ("SDE Experience", "AI/ML Experience").
+ */
+function GroupCard({ block }: { block: VaultBlock }) {
+  const legacy = block.group === null;
+  const entries = block.sections.reduce((n, s) => n + s.entries.length, 0);
+
+  return (
+    <div className={cn("card overflow-hidden", legacy && "border-amber-300")}>
+      <div
+        className={cn(
+          "flex items-center gap-3 border-b px-4 py-3",
+          legacy ? "border-amber-200 bg-amber-50" : "border-line bg-canvas/50",
+        )}
+      >
+        <span
+          className={cn(
+            "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+            legacy ? "bg-amber-100 text-amber-700" : "bg-accentSoft text-accent",
+          )}
+        >
+          {legacy ? <FolderX size={15} /> : <FolderOpen size={15} />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <h4 className={cn("truncate font-semibold", legacy && "text-amber-800")}>
+            {block.group?.name ?? "Not in a group"}
+          </h4>
+          <p className={cn("text-xs", legacy ? "text-amber-700" : "text-muted")}>
+            {legacy
+              ? "Every section needs a group — drag these into one in the sidebar"
+              : `${block.sections.length} ${block.sections.length === 1 ? "section" : "sections"} · ${entries} ${entries === 1 ? "entry" : "entries"}`}
+          </p>
+        </div>
+      </div>
+
+      {block.sections.length === 0 ? (
+        <p className="px-4 py-4 text-sm text-muted">
+          No sections yet — use the <span className="font-medium">+</span> beside this group in
+          the sidebar.
+        </p>
+      ) : (
+        <ul className="divide-y divide-line">
+          {block.sections.map((s) => (
+            <li key={s.id}>
+              <Link
+                href={`/vault?section=${s.id}`}
+                className="group flex items-center justify-between gap-3 px-4 py-2.5 transition-colors hover:bg-canvas"
+              >
+                <span className="min-w-0">
+                  <span className="flex items-center gap-2">
+                    <span className="truncate text-sm font-medium group-hover:text-accent">
+                      {s.heading}
+                    </span>
+                    {s.type === "skill" && (
+                      <span className="shrink-0 rounded-full bg-accentSoft px-1.5 text-[10px] font-medium text-accent">
+                        Skills
+                      </span>
+                    )}
+                  </span>
+                  <span className="block text-xs text-muted">{sectionSummary(s)}</span>
+                </span>
+                <ArrowRight
+                  size={14}
+                  className="shrink-0 text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-accent"
+                />
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -151,11 +259,16 @@ function StrengthChart({ counts }: { counts: VaultOverview["strength"] }) {
 
 export function VaultOverviewView({
   overview,
-  sections,
+  blocks,
 }: {
   overview: VaultOverview;
-  sections: SectionWithEntries[];
+  /** Groups in sidebar order, each with its sections; the ungrouped block may be among them. */
+  blocks: VaultBlock[];
 }) {
+  // Real groups in their own order, and the legacy ungrouped block — only if it
+  // holds anything — last, where it reads as leftovers rather than a group.
+  const groups = blocks.filter((b) => b.group !== null);
+  const unfiled = blocks.find((b) => b.group === null && b.sections.length > 0);
   const { totals, attention, skills } = overview;
   const visible = attention.slice(0, ATTENTION_VISIBLE);
   const folded = attention.slice(ATTENTION_VISIBLE);
@@ -180,7 +293,9 @@ export function VaultOverviewView({
             <div className="mt-6 flex flex-col items-center gap-2 py-4 text-center">
               <CheckCircle2 size={28} className="text-emerald-500" />
               <p className="text-sm font-medium">Nothing unfinished</p>
-              <p className="hint">Every entry has content and dates, and no bullet scores weak.</p>
+              <p className="hint">
+                Every section is in a group, every entry has content and dates, and no bullet scores weak.
+              </p>
             </div>
           ) : (
             <>
@@ -210,28 +325,12 @@ export function VaultOverviewView({
       </div>
 
       <div>
-        <h3 className="mb-3 font-semibold">Sections</h3>
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-3">
-          {sections.map((s) => {
-            const bullets = s.entries.reduce((n, e) => n + e.bullets.length, 0);
-            return (
-              <Link
-                key={s.id}
-                href={`/vault?section=${s.id}`}
-                className="card group flex items-center justify-between gap-3 p-4 transition-all hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-lift"
-              >
-                <span className="min-w-0">
-                  <span className="block truncate font-medium">{s.heading}</span>
-                  <span className="mt-0.5 block text-xs text-muted">
-                    {s.type === "skill"
-                      ? `${s.entries.length} skill ${s.entries.length === 1 ? "line" : "lines"}`
-                      : `${s.entries.length} ${s.entries.length === 1 ? "entry" : "entries"} · ${bullets} ${bullets === 1 ? "bullet" : "bullets"}`}
-                  </span>
-                </span>
-                <ArrowRight size={15} className="shrink-0 text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-accent" />
-              </Link>
-            );
-          })}
+        <h3 className="mb-3 font-semibold">Groups</h3>
+        <div className="grid gap-4 lg:grid-cols-2">
+          {groups.map((b) => (
+            <GroupCard key={b.group!.id} block={b} />
+          ))}
+          {unfiled && <GroupCard block={unfiled} />}
         </div>
       </div>
 

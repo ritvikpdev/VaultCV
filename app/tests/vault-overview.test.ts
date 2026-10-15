@@ -36,6 +36,7 @@ describe("summarizing the vault", () => {
       id: 10,
       heading: "Experience",
       type: "normal",
+      groupName: "Work",
       entries: [
         entry({ id: 1, bullets: [bullet(1, 5, true), bullet(2, 1), bullet(3, 2)] }),
         entry({ id: 2, title: "Intern", startDate: "", isCurrent: false }),
@@ -45,6 +46,7 @@ describe("summarizing the vault", () => {
       id: 20,
       heading: "Skills",
       type: "skill",
+      groupName: "Skills",
       entries: [
         entry({ id: 3, title: "Languages", information: "Java | k8s | Python" }),
         entry({ id: 4, title: "Tools", information: "kubernetes, Git" }),
@@ -85,10 +87,24 @@ describe("summarizing the vault", () => {
     assert.ok(weak[0]!.strength! <= weak[1]!.strength!);
   });
 
-  test("every flag says where it lives, so it can link there", () => {
+  test("every entry flag says where it lives, so it can link there", () => {
     for (const item of overview.attention) {
-      assert.ok(item.sectionId > 0 && item.entryId > 0);
+      assert.ok(item.sectionId > 0 && item.entryId! > 0);
     }
+  });
+
+  test("a section with no group is flagged ahead of everything else", () => {
+    const withLegacy = summarizeVault([
+      ...sections,
+      { id: 30, heading: "Old", type: "normal", groupName: null, entries: [] },
+    ]);
+    assert.equal(withLegacy.attention[0]!.kind, "no-group");
+    assert.equal(withLegacy.attention[0]!.sectionId, 30);
+    assert.equal(withLegacy.attention[0]!.entryId, undefined);
+  });
+
+  test("flags carry their group, for the Group → Section label", () => {
+    assert.ok(overview.attention.every((a) => a.groupName === "Work" || a.groupName === "Skills"));
   });
 
   test("an empty vault is all zeroes and no flags", () => {

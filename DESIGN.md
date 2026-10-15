@@ -312,9 +312,13 @@ Everything below is built and working.
 
 ### The vault
 
-- **Sections and groups you define yourself.** Create and name them as you like;
-  grouping is optional. The only structural choice is `normal` (dates,
-  organisation, bullets) versus `skill` (a label plus sub-skills).
+- **Groups and sections you define yourself.** Groups are the top level ("Work
+  Experience", "Skills") and every section sits in one ("SDE Experience",
+  "Web Dev Skills"); both are named by you. Wherever a vault item appears
+  outside the vault — the resume's vault picker, entries pulled into a resume,
+  tuner suggestions — it is labelled "Group → Section". The only structural
+  choice is `normal` (dates, organisation, bullets) versus `skill` (a label
+  plus sub-skills).
 - **Entries and bullets** with dates, organisation, location, subtitle, and
   per-section extra fields. Bullets can be pinned so the tuner always favours
   them. A section shows its entries as a grid of tiles; opening one slides in a

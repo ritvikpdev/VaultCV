@@ -98,8 +98,9 @@ export const profile = pgTable(
 );
 
 /**
- * Optional, user-named grouping for vault sections — purely organisational,
- * for the sidebar. Sections don't need a group.
+ * User-named groups: the vault's top level ("Work Experience"), each holding
+ * sections ("SDE Experience"). Every section belongs to one — enforced by the
+ * section actions, not the column, so sections filed before the rule load.
  */
 export const vaultGroups = pgTable(
   "vault_groups",
@@ -119,7 +120,7 @@ export const vaultGroups = pgTable(
  * This replaces the fixed `sectionType` vocabulary the vault used to impose.
  * Predefining "Career / Credentials / Personal" and a closed list of section
  * types decided for the user how their career should be filed; sections are now
- * whatever they say they are, grouped however they choose — or not at all.
+ * whatever they say they are, filed in groups they name.
  *
  * `type` is the one structural distinction that remains, because it genuinely
  * changes the shape of an entry:

@@ -3,9 +3,10 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { hasApiKey } from "@/db/ai-config";
-import { allSections, allSkills } from "@/db/queries";
+import { allGroups, allSections, allSkills } from "@/db/queries";
 import { getResumeFull, vaultOptionsForResume } from "@/db/resume-queries";
 import { withVault } from "@/db/session";
+import { buildVaultIndex, formatPath, pathOfSection } from "@/lib/vault-path";
 
 import { type SectionVaultData, type VaultSkillContext } from "./content-tab";
 import { ResumeEditor, type Tab } from "./editor";
@@ -29,16 +30,25 @@ export default async function ResumePage({
   const loaded = await withVault(async () => {
     const resume = await getResumeFull(resumeId);
     if (!resume) return null;
-    const [opts, sections, skills, keyPresent] = await Promise.all([
+    const [opts, sections, skills, groups, keyPresent] = await Promise.all([
       vaultOptionsForResume(resume.sections.map((s) => s.id)),
       allSections(),
       allSkills(),
+      allGroups(),
       hasApiKey(),
     ]);
-    return { resume, opts, sections, skills, keyPresent };
+    return { resume, opts, sections, skills, groups, keyPresent };
   });
   if (!loaded) notFound();
-  const { resume, opts, sections, skills, keyPresent } = loaded;
+  const { resume, opts, sections, skills, groups, keyPresent } = loaded;
+
+  // "Group → Section" for every vault item the editor might mention.
+  const vaultIndex = buildVaultIndex({
+    groups,
+    sections: opts.sections,
+    entries: opts.entries,
+    skills: opts.skills,
+  });
 
   const activeTab: Tab = tab === "customize" || tab === "tune" ? (tab as Tab) : "content";
 
@@ -61,7 +71,11 @@ export default async function ResumePage({
   const vaultSkills: VaultSkillContext = {
     targets: sections
       .filter((s) => s.type === "skill")
-      .map((s) => ({ id: s.id, heading: s.heading })),
+      // Named with their group: two groups can each hold a section called "Skills".
+      .map((s) => {
+        const path = pathOfSection(vaultIndex, s.id);
+        return { id: s.id, heading: path ? formatPath(path) : s.heading };
+      }),
     known: skills.map((s) => s.name),
   };
 
@@ -83,6 +97,7 @@ export default async function ResumePage({
         resume={resume}
         vaultData={vaultData}
         vaultSkills={vaultSkills}
+        vaultIndex={vaultIndex}
         activeTab={activeTab}
         hasApiKey={keyPresent}
       />

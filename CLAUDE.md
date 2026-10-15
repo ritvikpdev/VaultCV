@@ -158,10 +158,20 @@ Dev machines are **Windows**; production is Vercel + Supabase.
 
 - **No predefined sections.** `vault_sections` rows are created and named by the
   user. The only structural distinction is `type` (`normal` vs `skill`), because
-  that changes an entry's shape. Grouping is optional and user-named. Do not
-  reintroduce a fixed taxonomy — an earlier version imposed Career / Credentials
-  / Personal plus a closed list of section types, deciding for the user how
-  their own history should be filed.
+  that changes an entry's shape. Do not reintroduce a fixed taxonomy — an
+  earlier version imposed Career / Credentials / Personal plus a closed list of
+  section types, deciding for the user how their own history should be filed.
+- **Every section belongs to a group; groups lead.** Groups are the vault's top
+  level ("Work Experience"), sections the shelves inside ("SDE Experience",
+  "AI/ML Experience") — both named by the user. This used to be optional;
+  section names alone turned out ambiguous, so anywhere a vault item is shown
+  away from the vault (resume picker, pulled entries, tuner) it reads
+  "Group → Section" via `src/lib/vault-path.ts`. Section actions refuse a
+  missing group and `deleteGroup` refuses a non-empty one. Paths that create
+  sections unasked (import, save-to-vault, the tuner) file them under a
+  same-named group (`ensureGroupNamed`). `group_id` stays nullable for sections
+  filed before the rule: they show as "Not in a group", can be dragged into a
+  group, and can't be dragged back out.
 - **Skills are entries, not their own table.** A skill entry is one resume line:
   title is the label ("Languages"), `information` holds the sub-skills.
   `vault_skills` is a DERIVED index, rebuilt from that text on every save via
