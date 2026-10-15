@@ -6,7 +6,7 @@ import { z } from "zod";
 
 import { db, first } from "@/db/client";
 import { withVault } from "@/db/session";
-import { setSetting, SETTING_KEYS } from "@/db/bootstrap";
+import { deleteSetting, getSetting, setSetting, SETTING_KEYS } from "@/db/bootstrap";
 import { vaultBullets, vaultEntries, vaultGroups, vaultSections, vaultSkills } from "@/db/schema";
 import { bulletStrength } from "@/lib/bullet-strength";
 import { extractSkills } from "@/lib/skill-index";
@@ -25,6 +25,48 @@ function touch() {
 function refresh() {
   revalidatePath("/vault");
   revalidatePath("/");
+}
+
+/* ------------------------------------------------------------------ */
+/* Overview — clearing "Needs attention" reminders                     */
+/* ------------------------------------------------------------------ */
+
+/** The cleared reminder keys, as stored. Unreadable values count as none. */
+async function clearedKeys(): Promise<string[]> {
+  try {
+    const parsed = JSON.parse((await getSetting(SETTING_KEYS.dismissedAttention)) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((k): k is string => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Hide one "Needs attention" reminder. Only the reminder — the entry, bullet
+ * or section it points at is untouched, so there is nothing to confirm.
+ */
+export async function clearAttentionItem(key: string): Promise<ActionResult> {
+  return withVault(async () => {
+    const parsed = z.string().trim().min(1).max(80).regex(/^[a-z-]+:\d+$/).safeParse(key);
+    if (!parsed.success) return fail("Unknown reminder");
+
+    const keys = await clearedKeys();
+    if (!keys.includes(parsed.data)) keys.push(parsed.data);
+    // Bounded: keys for problems since fixed are never generated again, so the
+    // oldest can go without anything reappearing that shouldn't.
+    await setSetting(SETTING_KEYS.dismissedAttention, JSON.stringify(keys.slice(-500)));
+    refresh();
+    return { ok: true };
+  });
+}
+
+/** Bring every cleared reminder back. */
+export async function restoreAttentionItems(): Promise<ActionResult> {
+  return withVault(async () => {
+    await deleteSetting(SETTING_KEYS.dismissedAttention);
+    refresh();
+    return { ok: true };
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -66,20 +108,34 @@ export async function renameGroup(id: number, name: string): Promise<ActionResul
   });
 }
 
-/** Deleting a group never deletes its sections — they just become ungrouped. */
+/**
+ * Delete an empty group.
+ *
+ * Every section belongs to a group, so a group that still holds sections is
+ * refused rather than orphaning them — the foreign key would quietly set their
+ * `group_id` to null, which is exactly the state the app no longer allows.
+ */
 export async function deleteGroup(id: number): Promise<ActionResult> {
   return withVault(async () => {
+    const held = await db
+      .select({ id: vaultSections.id })
+      .from(vaultSections)
+      .where(eq(vaultSections.groupId, id));
+    if (held.length > 0) {
+      return fail(
+        `Move or delete its ${held.length} section${held.length === 1 ? "" : "s"} first — every section needs a group.`,
+      );
+    }
+
     await db.delete(vaultGroups).where(eq(vaultGroups.id, id));
     refresh();
     return { ok: true };
   });
 }
 
-export async function setSectionGroup(
-  sectionId: number,
-  groupId: number | null,
-): Promise<ActionResult> {
+export async function setSectionGroup(sectionId: number, groupId: number): Promise<ActionResult> {
   return withVault(async () => {
+    if (!(await ownGroup(groupId))) return fail(NEEDS_GROUP);
     await db.update(vaultSections).set({ groupId }).where(eq(vaultSections.id, sectionId));
     refresh();
     return { ok: true };
@@ -90,27 +146,47 @@ export async function setSectionGroup(
 /* Sections                                                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Every section belongs to a group — groups are the vault's top level
+ * ("Work Experience"), sections the shelves inside them ("SDE Experience").
+ * The column stays nullable for sections filed before this rule; the app
+ * refuses to create or leave one ungrouped.
+ */
+const NEEDS_GROUP = "Choose a group for this section";
+
+const groupIdField = z.number({ invalid_type_error: NEEDS_GROUP, required_error: NEEDS_GROUP }).int().positive(NEEDS_GROUP);
+
+/**
+ * True when `id` is one of this user's groups. Checked explicitly because a
+ * foreign key is enforced without row-level security: Postgres would accept
+ * another user's group id, filing a section somewhere its owner can't see.
+ */
+async function ownGroup(id: number): Promise<boolean> {
+  return Boolean(await first(db.select({ id: vaultGroups.id }).from(vaultGroups).where(eq(vaultGroups.id, id))));
+}
+
 const sectionSchema = z.object({
   heading: z.string().trim().min(1, "Section needs a heading").max(60),
   type: z.enum(["normal", "skill"]),
   icon: z.string().trim().max(40).default(""),
-  groupId: z.number().int().nullable().default(null),
+  groupId: groupIdField,
 });
 
 export async function createSection(input: {
   heading: string;
   type: string;
   icon?: string;
-  groupId?: number | null;
+  groupId: number;
 }): Promise<ActionResult<number>> {
   return withVault(async () => {
     const parsed = sectionSchema.safeParse({
       heading: input.heading,
       type: input.type,
       icon: input.icon ?? "",
-      groupId: input.groupId ?? null,
+      groupId: input.groupId,
     });
     if (!parsed.success) return fail(parsed.error.issues[0]!.message);
+    if (!(await ownGroup(parsed.data.groupId))) return fail(NEEDS_GROUP);
 
     const last = await first(
       db
@@ -133,21 +209,22 @@ export async function createSection(input: {
 
 export async function updateSection(
   id: number,
-  input: { heading: string; icon?: string; groupId?: number | null },
+  input: { heading: string; icon?: string; groupId: number },
 ): Promise<ActionResult> {
   return withVault(async () => {
     const parsed = z
       .object({
         heading: z.string().trim().min(1, "Section needs a heading").max(60),
         icon: z.string().trim().max(40).default(""),
-        groupId: z.number().int().nullable().default(null),
+        groupId: groupIdField,
       })
       .safeParse({
         heading: input.heading,
         icon: input.icon ?? "",
-        groupId: input.groupId ?? null,
+        groupId: input.groupId,
       });
     if (!parsed.success) return fail(parsed.error.issues[0]!.message);
+    if (!(await ownGroup(parsed.data.groupId))) return fail(NEEDS_GROUP);
 
     // `type` is deliberately not editable: switching a section between normal and
     // skill would leave every existing entry with the wrong shape.
@@ -206,9 +283,12 @@ export async function reorderSections(
       .safeParse(blocks);
     if (!parsed.success) return fail("Could not read the new section order");
 
-    const known = new Set(
-      (await db.select({ id: vaultSections.id }).from(vaultSections)).map((r) => r.id),
+    const currentGroup = new Map(
+      (await db.select({ id: vaultSections.id, groupId: vaultSections.groupId }).from(vaultSections)).map(
+        (r) => [r.id, r.groupId],
+      ),
     );
+    const groups = new Set((await db.select({ id: vaultGroups.id }).from(vaultGroups)).map((g) => g.id));
 
     await db.transaction(async (tx) => {
       let position = 0;
@@ -216,10 +296,16 @@ export async function reorderSections(
         for (const id of block.sectionIds) {
           // Silently skipping unknown ids matters: a section deleted in another
           // tab would otherwise resurrect itself as a phantom update.
-          if (!known.has(id)) continue;
+          if (!currentGroup.has(id)) continue;
+          // A section can be filed into a group but never taken out of one.
+          // The ungrouped block only exists for sections that predate groups
+          // being required; landing there (or in a group that isn't this
+          // user's) keeps whatever group the section already had.
+          const groupId =
+            block.groupId !== null && groups.has(block.groupId) ? block.groupId : currentGroup.get(id)!;
           await tx
             .update(vaultSections)
-            .set({ groupId: block.groupId, displayOrder: position })
+            .set({ groupId, displayOrder: position })
             .where(eq(vaultSections.id, id));
           position += 1;
         }

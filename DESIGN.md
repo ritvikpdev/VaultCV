@@ -312,12 +312,21 @@ Everything below is built and working.
 
 ### The vault
 
-- **Sections and groups you define yourself.** Create and name them as you like;
-  grouping is optional. The only structural choice is `normal` (dates,
-  organisation, bullets) versus `skill` (a label plus sub-skills).
+- **Groups and sections you define yourself.** Groups are the top level ("Work
+  Experience", "Skills") and every section sits in one ("SDE Experience",
+  "Web Dev Skills"); both are named by you. Wherever a vault item appears
+  outside the vault — the resume's vault picker, entries pulled into a resume,
+  tuner suggestions — it is labelled "Group → Section". The only structural
+  choice is `normal` (dates, organisation, bullets) versus `skill` (a label
+  plus sub-skills).
 - **Entries and bullets** with dates, organisation, location, subtitle, and
   per-section extra fields. Bullets can be pinned so the tuner always favours
-  them.
+  them. A section shows its entries as a grid of tiles; opening one slides in a
+  panel where every field edits in place and saves itself — no forms, no Save
+  button. Skill lines edit as chips.
+- **An overview** as the vault's front page: totals, a bullet-strength
+  breakdown, a "needs attention" list (empty entries, weak bullets, missing
+  dates) linking straight to each item, and every skill in one cloud.
 - **Bullet strength scoring** — action verbs, quantification, length, passive
   voice — computed locally with no AI, shown as a five-segment meter with the
   specific reasons it scored that way.
@@ -329,8 +338,24 @@ Everything below is built and working.
 - **Move an entry to another section** through a picker, with a type guard that
   refuses `normal`↔`skill` moves in the server action as well as the UI.
 - **Drag to reorder** groups, sections, entries and bullets. Sections can be
-  dragged between groups to file them. Chevrons collapse entries; they never
-  move anything.
+  dragged between groups to file them.
+
+### The resume editor
+
+- **FlowCV-style Content tab.** A list of cards — personal details, one
+  collapsible card per section with draggable entry rows and an eye to hide an
+  entry from this resume while keeping it — and an editor view that replaces
+  the list when you open an entry. No Save button: the live preview updates on
+  the same frame as you type, and changes save themselves.
+- **Rich-text descriptions** with bold, italic, underline, links, alignment and
+  paragraph lines, where each line is still its own bullet with its own vault
+  link, strength score and visibility.
+- **Pull from vault everywhere you add content:** whole entries from a
+  section's footer, single bullets from inside the entry editor, and
+  save-to-vault for entries and bullets written on the resume.
+- **Masked MM/YYYY dates** with a month/year picker and "Present".
+- **Per-section customizations** (title order, title line style, skills
+  layout) and editor icons for sections.
 
 ### Import
 

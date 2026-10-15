@@ -277,5 +277,16 @@ CREATE POLICY "own_rows" ON "vault_entries" AS PERMISSIVE FOR ALL TO "authentica
 CREATE POLICY "own_rows" ON "vault_groups" AS PERMISSIVE FOR ALL TO "authenticated" USING ((select auth.uid()) = user_id) WITH CHECK ((select auth.uid()) = user_id);
 CREATE POLICY "own_rows" ON "vault_sections" AS PERMISSIVE FOR ALL TO "authenticated" USING ((select auth.uid()) = user_id) WITH CHECK ((select auth.uid()) = user_id);
 CREATE POLICY "own_rows" ON "vault_skills" AS PERMISSIVE FOR ALL TO "authenticated" USING ((select auth.uid()) = user_id) WITH CHECK ((select auth.uid()) = user_id);
+ALTER TABLE "profile" ADD COLUMN "title" text DEFAULT '' NOT NULL;
+ALTER TABLE "profile" ADD COLUMN "details" jsonb DEFAULT '[]'::jsonb NOT NULL;
+ALTER TABLE "profile" ADD COLUMN "contact_order" jsonb DEFAULT '[]'::jsonb NOT NULL;
+ALTER TABLE "resume_bullets" ADD COLUMN "html" text;
+ALTER TABLE "resume_bullets" ADD COLUMN "align" text;
+ALTER TABLE "resume_bullets" ADD COLUMN "is_paragraph" boolean DEFAULT false NOT NULL;
+ALTER TABLE "resume_entries" ADD COLUMN "is_current_override" boolean;
+ALTER TABLE "resume_entries" ADD COLUMN "url_override" text;
+ALTER TABLE "resume_entries" ADD COLUMN "meta_override" jsonb;
+ALTER TABLE "resume_sections" ADD COLUMN "icon" text;
+ALTER TABLE "resume_sections" ADD COLUMN "options" jsonb DEFAULT '{}'::jsonb NOT NULL;
 
 commit;

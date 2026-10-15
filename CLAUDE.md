@@ -158,10 +158,20 @@ Dev machines are **Windows**; production is Vercel + Supabase.
 
 - **No predefined sections.** `vault_sections` rows are created and named by the
   user. The only structural distinction is `type` (`normal` vs `skill`), because
-  that changes an entry's shape. Grouping is optional and user-named. Do not
-  reintroduce a fixed taxonomy — an earlier version imposed Career / Credentials
-  / Personal plus a closed list of section types, deciding for the user how
-  their own history should be filed.
+  that changes an entry's shape. Do not reintroduce a fixed taxonomy — an
+  earlier version imposed Career / Credentials / Personal plus a closed list of
+  section types, deciding for the user how their own history should be filed.
+- **Every section belongs to a group; groups lead.** Groups are the vault's top
+  level ("Work Experience"), sections the shelves inside ("SDE Experience",
+  "AI/ML Experience") — both named by the user. This used to be optional;
+  section names alone turned out ambiguous, so anywhere a vault item is shown
+  away from the vault (resume picker, pulled entries, tuner) it reads
+  "Group → Section" via `src/lib/vault-path.ts`. Section actions refuse a
+  missing group and `deleteGroup` refuses a non-empty one. Paths that create
+  sections unasked (import, save-to-vault, the tuner) file them under a
+  same-named group (`ensureGroupNamed`). `group_id` stays nullable for sections
+  filed before the rule: they show as "Not in a group", can be dragged into a
+  group, and can't be dragged back out.
 - **Skills are entries, not their own table.** A skill entry is one resume line:
   title is the label ("Languages"), `information` holds the sub-skills.
   `vault_skills` is a DERIVED index, rebuilt from that text on every save via
@@ -191,24 +201,55 @@ Dev machines are **Windows**; production is Vercel + Supabase.
   load-bearing: the in-flight order lives in a **ref updated synchronously**,
   because `setState` is async and a fast drag would otherwise reach the release
   handler thinking nothing changed and silently drop the write; and drags start
-  from a **grip handle**, not the row, because rows are links. No auto-scroll —
-  a list long enough to scroll mid-drag is the point to reach for a real
-  library. The Customize sections list is the only plausible candidate.
-- **Chevrons collapse; they never move.** True in both the vault and the resume
-  editor. Reordering is drag-only at every level. Don't reintroduce up/down
+  from a **grip handle**, not the row, because rows are links. Anything that
+  wraps — the vault's entry tiles, skill chips — passes `layout: "grid"`, which
+  hit-tests by reading order instead of height alone (`dropIndex`). No
+  auto-scroll — a list long enough to scroll mid-drag is the point to reach for
+  a real library. The Customize sections list is the only plausible candidate.
+- **Chevrons collapse; they never move.** True in the resume editor (the vault
+  has nothing to collapse — entries are tiles that open in a side panel).
+  Reordering is drag-only at every level. Don't reintroduce up/down
   arrows alongside it — the same icon meaning two things depending on the row is
   how misclicks get trained.
-- **Section order lives in Customize; Content has no move controls.** Content
-  reorders entries and bullets by drag and folds sections with a chevron, but
-  can't move a section. `moveSection` survives as an adjacent swap with exactly
-  one caller — the tuner's REORDER recommendation — so don't delete it as
-  unused. Resume entries drag only within their section, because sections are
-  typed and a job under EDUCATION renders wrong.
+- **Sections reorder by drag in both Content and Customize.** This used to be
+  Customize-only; the FlowCV-style Content list made section cards draggable
+  by their grip too, through the same `reorderResumeSections`. `moveSection`
+  survives as an adjacent swap with exactly one caller — the tuner's REORDER
+  recommendation — so don't delete it as unused. Resume entries drag only
+  within their section, because sections are typed and a job under EDUCATION
+  renders wrong.
 - **Resume skill categories are derived, not stored.** `resume_skills` holds one
   row per skill carrying a category string; the renderer groups them. Editing a
   category means editing a set of rows, and the save diffs by name
   (`src/lib/skill-category.ts`) so rows keep their `source_skill_id` — a
   blanket delete-and-reinsert would sever every vault link on a typo fix.
+
+### The resume editor
+
+- **Content edits go to a working copy first.** `useResumeDraft`
+  (`resume/[id]/draft.tsx`) holds the resume the preview renders from; every
+  keystroke updates it on the same frame and a serial save queue persists it
+  behind. The writes in `resume/editor-actions.ts` take the state the user
+  arrived at (set, not toggle) and don't revalidate — the draft already shows
+  the result. Structural actions (vault pull, add section/entry) still
+  revalidate, and fresh server data is merged in by `lib/draft-merge.ts`:
+  server first, locally edited ("dirty") fields put back. Don't make the
+  preview read server props directly again, and don't add a draft write that
+  revalidates — it re-fetches the whole vault to learn nothing.
+- **A description is its bullets.** The Tiptap editor's document is `line+`,
+  one line per `resume_bullets` row (`syncEntryBullets`), so vault links,
+  strength scores and the tuner keep working per bullet. Formatting is stored
+  in `resume_bullets.html` — the allowlist in `lib/rich-text.ts` (strong, em,
+  u, http/https/mailto links) — and `text` is always written as its plain
+  twin. Everything except the renderer reads `text`; the renderer sanitises
+  `html` again before printing it. Tiptap is the one editor dependency, pinned
+  to an exact version.
+- **Per-section options default to the original look.** `resume_sections.options`
+  is `{}` on old rows and `sectionOptions()` fills defaults that reproduce how
+  resumes printed before options existed. Section icons are editor chrome
+  only; printed headings stay plain text.
+- **Personal details are the shared profile**, edited from inside a resume
+  (`updateProfileDetails`). The editor says so; there is no per-resume copy.
 
 ---
 

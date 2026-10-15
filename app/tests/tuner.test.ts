@@ -57,7 +57,7 @@ function emptyResume(): ResolvedResume {
     id: 1, name: "Test", targetRole: "", targetCompany: "",
     profile: {
       id: 1, userId: USER, fullName: "Ritvik", email: "r@example.com", phone: "", location: "",
-      links: [], summary: "", createdAt: 0, updatedAt: 0,
+      links: [], summary: "", title: "", details: [], contactOrder: [], createdAt: 0, updatedAt: 0,
     },
     summary: "",
     style: {
@@ -272,7 +272,7 @@ describe("recommendations", () => {
     const resume = emptyResume();
     resume.sections = [
       {
-        id: 1, sectionType: "experience", heading: "WORK EXPERIENCE", layout: "normal",
+        id: 1, sectionType: "experience", heading: "WORK EXPERIENCE", layout: "normal", icon: null, options: {},
         isVisible: true, pageBreakAfter: false, skills: [],
         entries: [
           {
@@ -285,6 +285,9 @@ describe("recommendations", () => {
                 text: "Engineered Spring Boot microservices handling 300K transactions daily.",
                 sourceBulletId: 1,
                 isVisible: true,
+                html: null,
+                align: "left",
+                isParagraph: false,
               },
             ],
           },
@@ -303,7 +306,7 @@ describe("recommendations", () => {
     const resume = emptyResume();
     resume.sections = [
       {
-        id: 1, sectionType: "experience", heading: "WORK EXPERIENCE", layout: "normal",
+        id: 1, sectionType: "experience", heading: "WORK EXPERIENCE", layout: "normal", icon: null, options: {},
         isVisible: true, pageBreakAfter: false, skills: [],
         entries: [
           {
@@ -311,8 +314,8 @@ describe("recommendations", () => {
             startDate: "01/2022", endDate: "01/2024", isCurrent: false, url: "", meta: {},
             sourceEntryId: 1, isVisible: true,
             bullets: [
-              { id: 1, text: "Built Spring Boot RESTful APIs and Java backend services.", sourceBulletId: 1, isVisible: true },
-              { id: 2, text: "Ran Kubernetes container orchestration with automated CI/CD pipelines and testing.", sourceBulletId: 2, isVisible: true },
+              { id: 1, text: "Built Spring Boot RESTful APIs and Java backend services.", sourceBulletId: 1, isVisible: true, html: null, align: "left", isParagraph: false },
+              { id: 2, text: "Ran Kubernetes container orchestration with automated CI/CD pipelines and testing.", sourceBulletId: 2, isVisible: true, html: null, align: "left", isParagraph: false },
             ],
           },
         ],
@@ -332,7 +335,7 @@ describe("resume coverage detection", () => {
     const resume = emptyResume();
     resume.sections = [
       {
-        id: 1, sectionType: "experience", heading: "WORK EXPERIENCE", layout: "normal",
+        id: 1, sectionType: "experience", heading: "WORK EXPERIENCE", layout: "normal", icon: null, options: {},
         isVisible: true, pageBreakAfter: false, skills: [],
         entries: [
           {
@@ -340,7 +343,7 @@ describe("resume coverage detection", () => {
             startDate: "", endDate: "", isCurrent: false, url: "", meta: {},
             sourceEntryId: 1, isVisible: true,
             bullets: [
-              { id: 1, text: "Built Spring Boot services in Java.", sourceBulletId: 1, isVisible: false },
+              { id: 1, text: "Built Spring Boot services in Java.", sourceBulletId: 1, isVisible: false, html: null, align: "left", isParagraph: false },
             ],
           },
         ],

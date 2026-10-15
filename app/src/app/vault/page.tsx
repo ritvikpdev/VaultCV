@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Pin } from "lucide-react";
+import { ArrowRight, Pin } from "lucide-react";
 
 import {
   allGroups,
@@ -8,9 +8,15 @@ import {
   vaultBlocks,
   type SearchHit,
 } from "@/db/queries";
+import { SectionPath } from "@/components/section-path";
+import { getSetting, SETTING_KEYS } from "@/db/bootstrap";
 import { withVault } from "@/db/session";
+import { STRENGTH_COLORS } from "@/lib/bullet-strength";
+import { cn } from "@/lib/utils";
+import { summarizeVault } from "@/lib/vault-overview";
 
 import type { MoveTargetGroup } from "./move-entry-dialog";
+import { VaultOverviewView } from "./overview";
 import { SectionView } from "./section-view";
 import { VaultSidebar, type SidebarBlock } from "./sidebar";
 
@@ -24,14 +30,24 @@ export default async function VaultPage({
   const params = await searchParams;
   const query = params.q?.trim() ?? "";
 
-  const { blocks, groups, counts, hits } = await withVault(async () => ({
+  const { blocks, groups, counts, hits, clearedRaw } = await withVault(async () => ({
     blocks: await vaultBlocks(),
     groups: await allGroups(),
     counts: await entryCountsBySection(),
     // Loaded here rather than inside <SearchResults>: a child component renders
     // after this function returns, outside the vault scope.
     hits: query ? await searchVault(query) : [],
+    clearedRaw: await getSetting(SETTING_KEYS.dismissedAttention),
   }));
+
+  // Reminders the user cleared on the overview. A bad value means none.
+  let cleared = new Set<string>();
+  try {
+    const parsed = JSON.parse(clearedRaw ?? "[]");
+    if (Array.isArray(parsed)) cleared = new Set(parsed.filter((k): k is string => typeof k === "string"));
+  } catch {
+    cleared = new Set();
+  }
 
   // The sidebar only draws headings and counts, so entries and their bullets
   // are stripped before crossing to the client. Sending the whole vault to
@@ -43,7 +59,9 @@ export default async function VaultPage({
 
   const sections = blocks.flatMap((b) => b.sections);
   const requestedId = Number(params.section);
-  const active = sections.find((s) => s.id === requestedId) ?? sections[0] ?? null;
+  // No section asked for (or one that no longer exists) means the overview,
+  // not the first section — the overview is the vault's front page now.
+  const active = sections.find((s) => s.id === requestedId) ?? null;
 
   // Where an entry in the open section may be moved: same kind only, itself
   // excluded, grouped the way the sidebar files them. Built here because the
@@ -71,12 +89,33 @@ export default async function VaultPage({
       </div>
 
       <div className="flex gap-8">
-        <VaultSidebar blocks={sidebarBlocks} counts={counts} activeId={active?.id ?? null} />
+        <VaultSidebar
+          blocks={sidebarBlocks}
+          counts={counts}
+          activeId={active?.id ?? null}
+          overviewActive={!query && !active && sections.length > 0}
+        />
 
         {query ? (
-          <SearchResults query={query} hits={hits} />
+          <SearchResults
+            query={query}
+            hits={hits}
+            groupNames={Object.fromEntries(groups.map((g) => [g.id, g.name]))}
+          />
         ) : active ? (
-          <SectionView section={active} groups={groups} moveTargets={moveTargets} />
+          // Keyed so per-section UI state (an open "add" tile) doesn't follow
+          // you into the next section.
+          <SectionView key={active.id} section={active} groups={groups} moveTargets={moveTargets} />
+        ) : sections.length > 0 ? (
+          <VaultOverviewView
+            overview={summarizeVault(
+              blocks.flatMap((b) =>
+                b.sections.map((s) => ({ ...s, groupName: b.group?.name ?? null })),
+              ),
+              cleared,
+            )}
+            blocks={blocks}
+          />
         ) : (
           <div className="card flex min-h-64 flex-1 flex-col items-center justify-center border-dashed p-10 text-center">
             <p className="font-medium">Your vault is empty</p>
@@ -94,7 +133,15 @@ export default async function VaultPage({
   );
 }
 
-function SearchResults({ query, hits }: { query: string; hits: SearchHit[] }) {
+function SearchResults({
+  query,
+  hits,
+  groupNames,
+}: {
+  query: string;
+  hits: SearchHit[];
+  groupNames: Record<number, string>;
+}) {
   const bulletHits = hits.reduce((n, h) => n + h.bullets.length, 0);
 
   return (
@@ -118,17 +165,29 @@ function SearchResults({ query, hits }: { query: string; hits: SearchHit[] }) {
         hits.map(({ entry, section, bullets, matchedHeader }) => (
           <div key={entry.id} className="card p-5">
             <div className="flex items-baseline justify-between gap-3">
-              <p className="font-semibold">
+              <Link
+                href={`/vault?section=${section.id}&entry=${entry.id}`}
+                className="group min-w-0 font-semibold hover:text-accent"
+              >
                 {entry.title}
                 {entry.organization && (
                   <span className="font-normal text-muted">, {entry.organization}</span>
                 )}
-              </p>
+                <ArrowRight
+                  size={13}
+                  className="ml-1 inline opacity-0 transition-opacity group-hover:opacity-100"
+                />
+              </Link>
               <Link
                 href={`/vault?section=${section.id}`}
-                className="shrink-0 text-xs font-medium text-accent hover:underline"
+                className="flex min-w-0 shrink-0 rounded-full bg-canvas px-2 py-0.5 text-xs hover:bg-accentSoft"
               >
-                {section.heading} →
+                <SectionPath
+                  path={{
+                    group: section.groupId === null ? null : (groupNames[section.groupId] ?? null),
+                    section: section.heading,
+                  }}
+                />
               </Link>
             </div>
 
@@ -137,10 +196,19 @@ function SearchResults({ query, hits }: { query: string; hits: SearchHit[] }) {
             )}
 
             {bullets.length > 0 && (
-              <ul className="mt-3 space-y-1.5">
+              <ul className="mt-3 space-y-2">
                 {bullets.map((b) => (
-                  <li key={b.id} className="flex items-start gap-2 text-sm">
-                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-ink" />
+                  <li
+                    key={b.id}
+                    className="relative flex items-start gap-2 overflow-hidden rounded-lg border border-line py-2 pl-3.5 pr-2 text-sm"
+                  >
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "absolute inset-y-0 left-0 w-1",
+                        STRENGTH_COLORS[Math.max(1, Math.min(5, b.strength)) - 1],
+                      )}
+                    />
                     <span className="flex-1 leading-relaxed">{b.text}</span>
                     {b.isPinned && (
                       <Pin size={12} className="mt-1 shrink-0 text-accent" fill="currentColor" />

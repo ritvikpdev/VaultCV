@@ -13,6 +13,7 @@ import type { ParseSource } from "@/lib/import-parse";
 import { parseResumeText } from "@/lib/import-parse";
 import type { ParsedEntry, ParsedImport, ParsedProfile } from "@/lib/import-schema";
 import { EmptyPdfTextError, extractPdfText } from "@/lib/pdf-extract";
+import { ensureGroupNamed } from "@/db/vault-groups";
 import { profileSchema } from "@/lib/profile-schema";
 import { normalizeTerm } from "@/lib/skill-aliases";
 import { findSimilar } from "@/lib/similarity";
@@ -244,9 +245,13 @@ export async function saveReviewedImport(
         if (existing) {
           sectionId = existing.id;
         } else {
+          // A new section is filed under a group of the same name — see
+          // ensureGroupNamed. The review screen doesn't ask, to keep import
+          // one step; regrouping is a drag in the sidebar afterwards.
           const created = await createSection({
             heading: entry.sectionHeading,
             type: entry.sectionType,
+            groupId: await ensureGroupNamed(entry.sectionHeading),
           });
           if (!created.ok) continue;
           sectionId = created.data;

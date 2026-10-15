@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 
+import { STRENGTH_COLORS } from "@/lib/bullet-strength";
 import { cn } from "@/lib/utils";
 
 /** Modal built on <dialog> so Escape, focus trapping and backdrop come free. */
@@ -78,14 +79,6 @@ export function ConfirmButton({
     </button>
   );
 }
-
-const STRENGTH_COLORS = [
-  "bg-red-400",
-  "bg-orange-400",
-  "bg-yellow-400",
-  "bg-lime-500",
-  "bg-emerald-500",
-];
 
 /** Five-segment strength meter. Title carries the explanation. */
 export function StrengthMeter({

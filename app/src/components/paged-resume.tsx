@@ -8,6 +8,7 @@ import {
   pageWidthIn,
   paginate,
 } from "@/lib/resume-blocks";
+import { scoreBullet, STRENGTH_COLORS, STRENGTH_LABELS } from "@/lib/bullet-strength";
 import type { ResolvedResume } from "@/lib/resume-model";
 
 import { ResumeBlockView, resumeCssVars } from "./resume-document";
@@ -33,14 +34,29 @@ import { ResumeBlockView, resumeCssVars } from "./resume-document";
  * geometry — but they are two implementations, and a very long single entry is
  * where they're most likely to diverge.
  */
+/** Width the strength strip needs beside the page, in screen pixels. */
+export const STRENGTH_GUTTER_PX = 26;
+
+type Marker = { id: number; top: number; score: number; hint: string };
+
 export function PagedResume({
   resume,
   scale = 1,
   onPageCount,
   onContactOverflow,
+  showStrength = false,
+  onBulletPick,
 }: {
   resume: ResolvedResume;
   scale?: number;
+  /**
+   * Draw a marker beside the page for each bullet, coloured by its writing
+   * strength. Editor chrome: it sits outside the page sheet, so it can never
+   * reach the printed document. The caller leaves STRENGTH_GUTTER_PX free.
+   */
+  showStrength?: boolean;
+  /** Clicking a marker: the caller opens the bullet's entry. */
+  onBulletPick?: (bulletId: number) => void;
   /** Reports the real page count so callers can stop estimating it. */
   onPageCount?: (n: number) => void;
   /**
@@ -114,8 +130,76 @@ export function PagedResume({
   const unscaledHeight =
     pages.length * (heightIn * 96 + LABEL_PX) + (pages.length - 1) * PAGE_GAP_PX;
 
+  // Strength markers: measured from the visible pages after layout, in screen
+  // pixels relative to the wrapper, so they line up with each bullet's first
+  // line whatever the scale.
+  const outerRef = useRef<HTMLDivElement>(null);
+  const pagesRef = useRef<HTMLDivElement>(null);
+  const [markers, setMarkers] = useState<Marker[]>([]);
+  const bulletText = new Map(
+    resume.sections.flatMap((s) => s.entries.flatMap((e) => e.bullets.map((b) => [b.id, b.text] as const))),
+  );
+  const textKey = [...bulletText].map(([id, t]) => `${id}:${t.length}`).join("|");
+
+  useLayoutEffect(() => {
+    const outer = outerRef.current;
+    const pagesEl = pagesRef.current;
+    if (!showStrength || !outer || !pagesEl) {
+      setMarkers((m) => (m.length ? [] : m));
+      return;
+    }
+    const base = outer.getBoundingClientRect().top;
+    const next: Marker[] = [];
+    for (const el of Array.from(pagesEl.querySelectorAll<HTMLElement>("[data-bullet-id]"))) {
+      const id = Number(el.dataset.bulletId);
+      const text = bulletText.get(id);
+      if (!text?.trim()) continue;
+      const rect = el.getBoundingClientRect();
+      const line = (parseFloat(getComputedStyle(el).lineHeight) || 14) * scale;
+      const { score, reasons } = scoreBullet(text);
+      const missing = reasons.find((r) => r.delta > 0 && !r.met);
+      const penalty = reasons.find((r) => r.delta < 0 && r.met);
+      next.push({
+        id,
+        top: rect.top - base + Math.min(line, rect.height) / 2,
+        score,
+        hint: penalty
+          ? penalty.label.replace("Avoids a", "Has a").replace("Not overlong", "Too long")
+          : missing
+            ? missing.label
+            : "",
+      });
+    }
+    setMarkers(next);
+    // Keyed on what moves bullets: layout inputs and bullet text, summarised
+    // as strings so a re-render with identical content doesn't re-measure.
+  }, [showStrength, scale, styleKey, blockKey, textKey, heights]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pageRightPx = widthIn * 96 * scale;
+
   return (
-    <div style={{ height: unscaledHeight * scale }}>
+    <div ref={outerRef} className="relative" style={{ height: unscaledHeight * scale }}>
+      {showStrength &&
+        markers.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => onBulletPick?.(m.id)}
+            aria-label={`${STRENGTH_LABELS[m.score]} bullet${m.hint ? ` — ${m.hint}` : ""}. Open it.`}
+            className="group absolute z-10 flex -translate-y-1/2 items-center"
+            style={{ top: m.top, left: pageRightPx + 2 }}
+          >
+            {/* The tick points from the page edge to the bullet's line. */}
+            <span className="h-px w-2 bg-line transition-colors group-hover:bg-ink/40" />
+            <span
+              className={`h-2.5 w-2.5 rounded-full ring-2 ring-canvas transition-transform group-hover:scale-125 ${STRENGTH_COLORS[m.score - 1]}`}
+            />
+            <span className="pointer-events-none absolute right-full top-1/2 mr-1 hidden -translate-y-1/2 whitespace-nowrap rounded-lg bg-ink px-2 py-1 text-[11px] text-white shadow-lift group-hover:block">
+              <span className="font-medium">{STRENGTH_LABELS[m.score]}</span>
+              {m.hint && <span className="opacity-75"> — {m.hint.toLowerCase()}</span>}
+            </span>
+          </button>
+        ))}
       <div style={{ transform: `scale(${scale})`, transformOrigin: "top left" }}>
       {/* Hidden measuring pass. Same width and styling as a real page, so the
           wrapping — and therefore the height — is identical. */}
@@ -151,11 +235,11 @@ export function PagedResume({
         ))}
       </div>
 
-      <div className="flex flex-col gap-4">
+      <div ref={pagesRef} className="flex flex-col gap-4">
         {pages.map((pageBlocks, i) => (
           <div key={i} className="relative">
             <div
-              className="resume-doc overflow-hidden bg-white shadow-sm ring-1 ring-line"
+              className="resume-doc overflow-hidden bg-white shadow-page"
               data-heading-style={resume.style.headingStyle}
               style={{
                 ...cssVars,

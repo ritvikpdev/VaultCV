@@ -6,7 +6,10 @@ import { Modal } from "@/components/ui";
 import type { VaultGroup, VaultSection } from "@/db/schema";
 import { cn } from "@/lib/utils";
 
-import { createSection, updateSection } from "./actions";
+import { createGroup, createSection, updateSection } from "./actions";
+
+/** The select's value for "make a new group with the name typed below". */
+const NEW_GROUP = "new";
 
 /**
  * New / edit section — modelled on the reference tool's "New Custom Section".
@@ -18,18 +21,25 @@ import { createSection, updateSection } from "./actions";
  *
  * Type is fixed after creation. Switching a section between normal and skill
  * would leave every entry in it holding fields the form no longer shows.
+ *
+ * The group is required and comes first: groups are the vault's top level
+ * ("Work Experience") and a section is a shelf inside one ("SDE Experience").
+ * A group can be created from here, so an empty vault isn't a dead end.
  */
 export function SectionDialog({
   open,
   onClose,
   groups,
   section,
+  defaultGroupId,
 }: {
   open: boolean;
   onClose: () => void;
   groups: VaultGroup[];
   /** Present when editing; absent when creating. */
   section?: VaultSection;
+  /** Preselected group when creating — set by a group's own "+" in the sidebar. */
+  defaultGroupId?: number;
 }) {
   const editing = Boolean(section);
 
@@ -37,13 +47,35 @@ export function SectionDialog({
   const [type, setType] = useState<"normal" | "skill">(
     (section?.type as "normal" | "skill") ?? "normal",
   );
-  const [groupId, setGroupId] = useState<number | null>(section?.groupId ?? null);
+  const [group, setGroup] = useState<number | typeof NEW_GROUP | null>(
+    section?.groupId ??
+      defaultGroupId ??
+      (groups.length === 0 ? NEW_GROUP : groups.length === 1 ? groups[0]!.id : null),
+  );
+  const [newGroupName, setNewGroupName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  const groupReady = group === NEW_GROUP ? Boolean(newGroupName.trim()) : group !== null;
 
   function submit() {
     setError(null);
     startTransition(async () => {
+      let groupId: number;
+      if (group === NEW_GROUP) {
+        const made = await createGroup(newGroupName);
+        if (!made.ok) {
+          setError(made.error);
+          return;
+        }
+        groupId = made.data;
+      } else if (group === null) {
+        setError("Choose a group for this section");
+        return;
+      } else {
+        groupId = group;
+      }
+
       const result = editing
         ? await updateSection(section!.id, { heading, groupId })
         : await createSection({ heading, type, groupId });
@@ -65,6 +97,49 @@ export function SectionDialog({
     >
       <div className="space-y-5">
         <div>
+          <label className="label" htmlFor="sec-group">
+            Group
+          </label>
+          <select
+            id="sec-group"
+            className="field"
+            value={group ?? ""}
+            onChange={(e) =>
+              setGroup(
+                e.target.value === NEW_GROUP
+                  ? NEW_GROUP
+                  : e.target.value
+                    ? Number(e.target.value)
+                    : null,
+              )
+            }
+          >
+            {group === null && <option value="">Choose a group…</option>}
+            {groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name}
+              </option>
+            ))}
+            <option value={NEW_GROUP}>+ New group…</option>
+          </select>
+          {group === NEW_GROUP && (
+            <input
+              className="field mt-2"
+              placeholder="Group name — e.g. Work Experience, Skills"
+              aria-label="New group name"
+              value={newGroupName}
+              autoFocus={groups.length > 0}
+              onChange={(e) => setNewGroupName(e.target.value)}
+            />
+          )}
+          <p className="hint mt-1">
+            The broad area this belongs to. One group can hold several sections —
+            &ldquo;Work Experience&rdquo; might hold &ldquo;SDE Experience&rdquo; and
+            &ldquo;AI/ML Experience&rdquo;.
+          </p>
+        </div>
+
+        <div>
           <label className="label" htmlFor="sec-heading">
             Heading
           </label>
@@ -73,10 +148,10 @@ export function SectionDialog({
             className="field"
             value={heading}
             autoFocus
-            placeholder="e.g. Work Experience, Publications, Side Projects"
+            placeholder="e.g. SDE Experience, Publications, Web Dev Skills"
             onChange={(e) => setHeading(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && heading.trim()) submit();
+              if (e.key === "Enter" && heading.trim() && groupReady) submit();
             }}
           />
           <p className="hint mt-1">
@@ -126,29 +201,6 @@ export function SectionDialog({
           )}
         </div>
 
-        <div>
-          <label className="label" htmlFor="sec-group">
-            Group <span className="font-normal text-muted">(optional)</span>
-          </label>
-          <select
-            id="sec-group"
-            className="field"
-            value={groupId ?? ""}
-            onChange={(e) => setGroupId(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">No group</option>
-            {groups.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.name}
-              </option>
-            ))}
-          </select>
-          <p className="hint mt-1">
-            Groups are yours to name and only affect how the sidebar is
-            organised.
-          </p>
-        </div>
-
         {error && (
           <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
         )}
@@ -160,7 +212,7 @@ export function SectionDialog({
           <button
             className="btn-accent"
             onClick={submit}
-            disabled={pending || !heading.trim()}
+            disabled={pending || !heading.trim() || !groupReady}
           >
             {pending ? "Saving…" : editing ? "Save" : "Create section"}
           </button>

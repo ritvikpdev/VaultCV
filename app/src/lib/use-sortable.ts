@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { place, sameOrder, type Order } from "./reorder";
+import { dropIndex, place, sameOrder, type Order } from "./reorder";
 
 /**
  * Drag-to-reorder, built on pointer events with no dependency.
@@ -42,12 +42,15 @@ export function useSortable({
   value,
   onCommit,
   disabled = false,
+  layout = "list",
 }: {
   /** The authoritative arrangement from the server. */
   value: Order;
   /** Fired once, on release, only when the arrangement actually changed. */
   onCommit: (next: Order) => void;
   disabled?: boolean;
+  /** `grid` for anything that wraps (tiles, chips) — see `dropIndex`. */
+  layout?: "list" | "grid";
 }) {
   const [order, setOrder] = useState<Order>(value);
   const [draggingId, setDraggingId] = useState<number | null>(null);
@@ -125,20 +128,11 @@ export function useSortable({
       const key = container ?? fallback;
       const ids = orderRef.current[key] ?? [];
 
-      let index = ids.length;
-      for (let i = 0; i < ids.length; i++) {
-        const el = itemEls.current.get(ids[i]!);
-        if (!el) continue;
-        const r = el.getBoundingClientRect();
-        if (y < r.top + r.height / 2) {
-          index = i;
-          break;
-        }
-      }
+      const boxes = ids.map((id) => itemEls.current.get(id)?.getBoundingClientRect() ?? null);
 
-      return { container: key, index };
+      return { container: key, index: dropIndex(boxes, x, y, layout) };
     },
-    [],
+    [layout],
   );
 
   const handleProps = useCallback(

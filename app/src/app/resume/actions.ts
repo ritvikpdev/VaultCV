@@ -227,6 +227,8 @@ export async function duplicateResume(id: number): Promise<ActionResult<number>>
             displayOrder: section.displayOrder,
             isVisible: section.isVisible,
             pageBreakAfter: section.pageBreakAfter,
+            icon: section.icon,
+            options: section.options,
           })
           .returning({ id: resumeSections.id }),
       ))!;

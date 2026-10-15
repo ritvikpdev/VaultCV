@@ -60,6 +60,44 @@ export function place(
   return next;
 }
 
+/** The on-screen box of one item, as `getBoundingClientRect` reports it. */
+export type Box = { top: number; bottom: number; left: number; right: number };
+
+/**
+ * Where a dragged item would land, given the pointer and the items' boxes in
+ * their current order.
+ *
+ * `list` looks only at height: an item counts as "after the pointer" once the
+ * pointer is above its midline. That is wrong for anything that wraps — a tile
+ * grid, a row of chips — where two items share a height and only the
+ * horizontal position separates them. `grid` treats the pointer as reading
+ * order: anything on a later row, or on the pointer's row but right of it, is
+ * after it. Rows are judged by each box's own vertical span, so uneven tile
+ * heights don't confuse it.
+ *
+ * Returns the index against the list as rendered, the convention `place` takes.
+ */
+export function dropIndex(
+  boxes: Array<Box | null>,
+  x: number,
+  y: number,
+  layout: "list" | "grid" = "list",
+): number {
+  for (let i = 0; i < boxes.length; i++) {
+    const r = boxes[i];
+    if (!r) continue;
+
+    if (layout === "list") {
+      if (y < r.top + (r.bottom - r.top) / 2) return i;
+      continue;
+    }
+
+    if (y < r.top) return i;
+    if (y <= r.bottom && x < r.left + (r.right - r.left) / 2) return i;
+  }
+  return boxes.length;
+}
+
 /** True when two Orders describe the same arrangement. */
 export function sameOrder(a: Order, b: Order): boolean {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);

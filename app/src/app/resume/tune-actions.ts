@@ -23,6 +23,7 @@ import {
 } from "@/db/schema";
 import { parseJobDescriptionHeuristically } from "@/lib/jd-parse";
 import { getSectionDef } from "@/lib/sections";
+import { ensureGroupNamed } from "@/db/vault-groups";
 import { tune, type TuneOutput } from "@/lib/tuner";
 
 import { createEntry as createVaultEntry, updateEntry as updateVaultEntry } from "../vault/actions";
@@ -58,7 +59,13 @@ async function ensureVaultSkillSection(): Promise<number> {
   return (await first(
     db
       .insert(vaultSections)
-      .values({ heading: "Skills", type: "skill", displayOrder: (last?.o ?? -1) + 1 })
+      .values({
+        heading: "Skills",
+        type: "skill",
+        // Every section needs a group; a new one gets a group of its own name.
+        groupId: await ensureGroupNamed("Skills"),
+        displayOrder: (last?.o ?? -1) + 1,
+      })
       .returning({ id: vaultSections.id }),
   ))!.id;
 }
