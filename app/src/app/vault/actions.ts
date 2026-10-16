@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { db, first } from "@/db/client";
@@ -358,6 +358,12 @@ const dateField = z
 
 const entrySchema = z.object({
   title: z.string().trim().min(1, "Title is required").max(200),
+  /**
+   * Private label; never printed. See vault_entries.nickname. Optional with no
+   * default on purpose: callers that don't send it (the tuner rewriting a
+   * skill line) must leave an existing nickname alone, not blank it.
+   */
+  nickname: z.string().trim().max(80).optional(),
   organization: z.string().trim().max(200).default(""),
   subtitle: z.string().trim().max(300).default(""),
   location: z.string().trim().max(160).default(""),
@@ -590,6 +596,72 @@ export async function updateEntry(id: number, input: EntryInput): Promise<Action
     await reindexSkills(id);
     refresh();
     return { ok: true };
+  });
+}
+
+/**
+ * Copy an entry, with its bullets, to sit right after the original.
+ *
+ * For a variant of the same job or degree — a different angle on the same
+ * facts — without retyping it. The copy is titled "<title> (copy)" so the two
+ * can be told apart until it's renamed. Bullets are copied unpinned: a pin
+ * makes the tuner favour a bullet, and pinning both copies of one line would
+ * count it twice.
+ */
+export async function duplicateEntry(id: number): Promise<ActionResult<number>> {
+  return withVault(async () => {
+    const source = await first(db.select().from(vaultEntries).where(eq(vaultEntries.id, id)));
+    if (!source) return fail("Entry not found");
+
+    const {
+      id: _id,
+      userId: _userId,
+      createdAt: _createdAt,
+      updatedAt: _updatedAt,
+      ...fields
+    } = source;
+
+    // Make room directly after the original rather than appending at the end.
+    await db
+      .update(vaultEntries)
+      .set({ displayOrder: sql`${vaultEntries.displayOrder} + 1` })
+      .where(
+        and(
+          eq(vaultEntries.sectionId, source.sectionId),
+          gt(vaultEntries.displayOrder, source.displayOrder),
+        ),
+      );
+
+    const copy = (await first(
+      db
+        .insert(vaultEntries)
+        .values({
+          ...fields,
+          title: `${source.title} (copy)`.slice(0, 200),
+          displayOrder: source.displayOrder + 1,
+        })
+        .returning({ id: vaultEntries.id }),
+    ))!;
+
+    const bullets = await db.select().from(vaultBullets).where(eq(vaultBullets.entryId, id));
+    if (bullets.length > 0) {
+      await db.insert(vaultBullets).values(
+        bullets.map((b) => ({
+          entryId: copy.id,
+          text: b.text,
+          tags: b.tags,
+          strength: b.strength,
+          isPinned: false,
+          isActive: b.isActive,
+          displayOrder: b.displayOrder,
+        })),
+      );
+    }
+
+    // A skill line's copy needs its own entries in the derived skill index.
+    await reindexSkills(copy.id);
+    refresh();
+    return { ok: true, data: copy.id };
   });
 }
 

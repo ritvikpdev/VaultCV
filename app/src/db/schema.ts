@@ -237,6 +237,13 @@ export const vaultEntries = pgTable(
      */
     title: text("title").notNull(),
     /**
+     * A private label for telling apart entries that share a title and
+     * employer but hold different bullets ("backend-heavy", "ML angle"). Shown
+     * in the vault and wherever a vault entry is picked or referenced from a
+     * resume; never resolved into a resume, so it never prints.
+     */
+    nickname: text("nickname").notNull().default(""),
+    /**
      * Skill sections only: the sub-skills list ("Java | C# | Python"). Stored as
      * entered; the derived index in `vault_skills` is what matching reads.
      */

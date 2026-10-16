@@ -12,10 +12,13 @@ import { cn } from "@/lib/utils";
  */
 export function SectionPath({
   path,
+  nickname,
   className,
   tone = "muted",
 }: {
   path: VaultPath;
+  /** The vault entry's private nickname, shown as a chip after the path. */
+  nickname?: string | null;
   className?: string;
   /** `muted` for tags and captions; `ink` where the path is the label itself. */
   tone?: "muted" | "ink";
@@ -34,6 +37,25 @@ export function SectionPath({
       <span className={cn("truncate font-medium", tone === "ink" ? "text-ink" : "text-ink/80")}>
         {path.section}
       </span>
+      {nickname && <NicknameChip nickname={nickname} />}
+    </span>
+  );
+}
+
+/**
+ * A vault entry's nickname — private, never printed. Shown wherever two
+ * entries with the same title and employer need telling apart.
+ */
+export function NicknameChip({ nickname, className }: { nickname: string; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "ml-1 inline-flex max-w-[12rem] shrink-0 items-center truncate rounded-full bg-violetSoft px-1.5 py-px text-[10px] font-medium text-violet",
+        className,
+      )}
+      title={`Nickname: ${nickname} — only you see this`}
+    >
+      {nickname}
     </span>
   );
 }

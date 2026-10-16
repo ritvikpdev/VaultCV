@@ -1,26 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { Database, Link2, Loader2, Search, Vault } from "lucide-react";
+import { Link2, Loader2, Search } from "lucide-react";
 
-import { SectionPath } from "@/components/section-path";
+import { NicknameChip, SectionPath } from "@/components/section-path";
 import { StrengthMeter } from "@/components/ui";
 import type { SectionType } from "@/db/schema";
 import { sectionOptions, type ResolvedEntry, type ResolvedSection } from "@/lib/resume-model";
 import { getSectionDef } from "@/lib/sections";
 import { cn } from "@/lib/utils";
-import { pathOfEntry } from "@/lib/vault-path";
+import { nicknameOfEntry, pathOfEntry } from "@/lib/vault-path";
 
 import {
   addVaultBulletToEntry,
   bulletOptionsForEntry,
   saveBulletToVault,
-  saveEntryToVault,
 } from "../manual-actions";
 import { DateField } from "./date-field";
 import { idForLine, useDraft } from "./draft";
 import { EditorShell, Field, Segmented, tipsFor } from "./editor-shell";
-import { RichTextEditor, type RichTextHandle } from "./rich-text-editor";
+import { RichTextEditor } from "./rich-text-editor";
 import { useVaultIndex } from "./vault-index-context";
 
 /** What to call the two main fields, per section type. */
@@ -53,10 +52,7 @@ export function EntryEditor({
   const opts = sectionOptions(section);
   const source = pathOfEntry(index, entry.sourceEntryId);
   const [linkOpen, setLinkOpen] = useState(Boolean(entry.url));
-  const [vaultOpen, setVaultOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [savingEntry, startSaveEntry] = useTransition();
-  const rich = useRef<RichTextHandle | null>(null);
   const stampIds = useRef<((ids: Record<string, number>) => void) | null>(null);
 
   const id = (f: string) => `e${entry.id}-${f}`;
@@ -93,20 +89,6 @@ export function EntryEditor({
     [draft],
   );
 
-  function saveToVault() {
-    startSaveEntry(async () => {
-      const r = await draft.runAndWait(() => saveEntryToVault(entry.id));
-      if (r.ok) rich.current?.markAllInVault();
-      setNotice(
-        r.ok
-          ? entry.sourceEntryId
-            ? "New lines saved to your vault."
-            : "Entry saved to your vault, with all its lines."
-          : r.error,
-      );
-    });
-  }
-
   return (
     <EditorShell
       title={`Edit ${def.label.replace(/s$/, "")}`}
@@ -120,43 +102,17 @@ export function EntryEditor({
       }}
       deleteMessage={`Remove "${entry.title || "this entry"}" from this resume? Your vault keeps its copy. You can undo for a few seconds.`}
       toolbar={
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <button className="pill-ai" onClick={() => setVaultOpen((o) => !o)} aria-expanded={vaultOpen}>
-              <Vault size={12} /> Pull bullets from vault
-            </button>
-            <button
-              className="pill-ai"
-              onClick={saveToVault}
-              disabled={savingEntry}
-              title={
-                entry.sourceEntryId
-                  ? "Save any lines not yet in your vault"
-                  : "Add this entry and all its lines to your vault"
-              }
-            >
-              {savingEntry ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}
-              {entry.sourceEntryId ? "Save new lines to vault" : "Save entry to vault"}
-            </button>
+        source || notice ? (
+          <div className="space-y-2">
             {source && (
-              <span className="ml-auto flex min-w-0 items-center gap-1 text-[11px]">
+              <p className="flex min-w-0 items-center gap-1 text-[11px]">
                 <span className="shrink-0 text-muted">From</span>
-                <SectionPath path={source} />
-              </span>
+                <SectionPath path={source} nickname={nicknameOfEntry(index, entry.sourceEntryId)} />
+              </p>
             )}
+            {notice && <p className="rounded-lg bg-violetSoft px-3 py-1.5 text-xs text-violet">{notice}</p>}
           </div>
-          {notice && <p className="rounded-lg bg-violetSoft px-3 py-1.5 text-xs text-violet">{notice}</p>}
-          {vaultOpen && (
-            <VaultBulletDrawer
-              entryId={entry.id}
-              onPick={async (vaultBulletId) => {
-                const r = await draft.runAndWait(() => addVaultBulletToEntry(entry.id, vaultBulletId));
-                if (r.ok) rich.current?.appendBullet(r.data);
-                else setNotice(r.error);
-              }}
-            />
-          )}
-        </div>
+        ) : undefined
       }
       customizations={
         <div className="space-y-4">
@@ -321,7 +277,6 @@ export function EntryEditor({
             return r.data;
           }}
           renderVaultPicker={({ onPick }) => <VaultBulletDrawer entryId={entry.id} onPick={onPick} autoFocus />}
-          handleRef={rich}
           labelledBy={id("desc")}
         />
       </div>
@@ -370,7 +325,9 @@ function VaultBulletDrawer({
     );
   }
 
-  const rows = options ? [...options.sameEntry.map((b) => ({ ...b, from: "" })), ...options.others] : [];
+  const rows = options
+    ? [...options.sameEntry.map((b) => ({ ...b, from: "", nickname: "" })), ...options.others]
+    : [];
 
   return (
     <div className="animate-fade-in rounded-xl border border-line bg-canvas/60 p-2">
@@ -401,7 +358,12 @@ function VaultBulletDrawer({
             >
               <span className="flex-1 leading-relaxed">
                 {b.text}
-                {b.from && <span className="mt-0.5 block text-[10px] text-muted">{b.from}</span>}
+                {b.from && (
+                  <span className="mt-0.5 block text-[10px] text-muted">
+                    {b.from}
+                    {b.nickname && <NicknameChip nickname={b.nickname} />}
+                  </span>
+                )}
               </span>
               {busy === b.id ? (
                 <Loader2 size={12} className="mt-0.5 animate-spin" />

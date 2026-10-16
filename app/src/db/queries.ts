@@ -125,6 +125,7 @@ export async function searchVault(query: string): Promise<SearchHit[]> {
         entry.title.toLowerCase().includes(q) ||
         entry.organization.toLowerCase().includes(q) ||
         entry.subtitle.toLowerCase().includes(q) ||
+        entry.nickname.toLowerCase().includes(q) ||
         entry.information.toLowerCase().includes(q);
 
       const matchedBullets = entry.bullets.filter(

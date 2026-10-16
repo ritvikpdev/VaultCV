@@ -5,6 +5,7 @@ import {
   AlertCircle,
   CalendarDays,
   Check,
+  Copy,
   FolderInput,
   Link2,
   Loader2,
@@ -37,6 +38,7 @@ const required = (v: string) => (v ? null : "This can't be empty");
 function fieldsOf(entry: EntryWithBullets) {
   return {
     title: entry.title,
+    nickname: entry.nickname,
     organization: entry.organization,
     subtitle: entry.subtitle,
     location: entry.location,
@@ -110,6 +112,7 @@ export function EntryPanel({
   groupName,
   moveTargets,
   onClose,
+  onDuplicate,
 }: {
   entry: EntryWithBullets;
   section: VaultSection;
@@ -117,9 +120,12 @@ export function EntryPanel({
   groupName: string | null;
   moveTargets: MoveTargetGroup[];
   onClose: () => void;
+  /** Copy this entry; the parent opens the copy. */
+  onDuplicate: () => Promise<void>;
 }) {
   const isSkill = section.type === "skill";
   const [moveOpen, setMoveOpen] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
   const [, startTransition] = useTransition();
 
   const { draft, commit, state, error } = useAutosave(fieldsOf(entry), (d) =>
@@ -201,6 +207,21 @@ export function EntryPanel({
               )}
             </div>
           </div>
+
+          {/* Private: tells apart entries that share a title and employer.
+              Shown wherever this entry is picked from a resume, never printed. */}
+          <section className="space-y-1">
+            <h3 className="text-sm font-semibold">
+              Nickname <span className="font-normal text-muted">(only you see this — never printed)</span>
+            </h3>
+            <InlineField
+              label="Nickname"
+              value={draft.nickname}
+              placeholder="e.g. Backend focus, ML version"
+              onCommit={(nickname) => commit({ nickname })}
+              className="text-sm"
+            />
+          </section>
 
           {isSkill ? (
             <>
@@ -321,7 +342,7 @@ export function EntryPanel({
               <section className="space-y-3">
                 <div className="flex items-baseline justify-between">
                   <h3 className="text-sm font-semibold">
-                    Achievements{" "}
+                    Description{" "}
                     <span className="font-normal text-muted">{entry.bullets.length || ""}</span>
                   </h3>
                   <p className="hint">
@@ -342,6 +363,17 @@ export function EntryPanel({
             onClick={() => setMoveOpen(true)}
           >
             <FolderInput size={14} /> Move
+          </button>
+          <button
+            className="btn-ghost mr-auto px-3 py-1.5"
+            disabled={duplicating}
+            title="Copy this entry and its bullets, then open the copy"
+            onClick={() => {
+              setDuplicating(true);
+              void onDuplicate().finally(() => setDuplicating(false));
+            }}
+          >
+            {duplicating ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />} Duplicate
           </button>
           <ConfirmButton
             className="btn px-3 py-1.5 text-red-600 hover:bg-red-50"

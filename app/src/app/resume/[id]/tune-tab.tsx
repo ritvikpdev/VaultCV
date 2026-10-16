@@ -14,7 +14,14 @@ import {
 import { SectionPath } from "@/components/section-path";
 import type { Recommendation } from "@/db/schema";
 import { cn } from "@/lib/utils";
-import { pathOfEntry, pathOfSection, pathOfSkill, type VaultPath } from "@/lib/vault-path";
+import {
+  nicknameOfEntry,
+  nicknameOfSkill,
+  pathOfEntry,
+  pathOfSection,
+  pathOfSkill,
+  type VaultPath,
+} from "@/lib/vault-path";
 
 import {
   applyRecommendation,
@@ -80,6 +87,15 @@ export function TuneTab({
       pathOfEntry(vaultIndex, id(rec.payload.vaultEntryId)) ??
       pathOfSection(vaultIndex, id(rec.payload.vaultSectionId)) ??
       pathOfSkill(vaultIndex, id(rec.payload.vaultSkillId))
+    );
+  }
+
+  /** The vault entry's nickname for a suggestion, when it has one. */
+  function nicknameOf(rec: Recommendation): string | null {
+    const id = (v: unknown) => (typeof v === "number" ? v : null);
+    return (
+      nicknameOfEntry(vaultIndex, id(rec.payload.vaultEntryId)) ??
+      nicknameOfSkill(vaultIndex, id(rec.payload.vaultSkillId))
     );
   }
   const [pending, startTransition] = useTransition();
@@ -289,6 +305,7 @@ export function TuneTab({
             const Icon = meta.icon;
             const why = String(rec.payload.why ?? "");
             const source = sourceOf(rec);
+            const nickname = nicknameOf(rec);
 
             return (
               <div key={rec.id} className="card p-4">
@@ -308,7 +325,7 @@ export function TuneTab({
                 {source && (
                   <p className="mt-1.5 flex min-w-0 items-center gap-1 text-[11px]">
                     <span className="shrink-0 text-muted">From</span>
-                    <SectionPath path={source} />
+                    <SectionPath path={source} nickname={nickname} />
                   </p>
                 )}
 

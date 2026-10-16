@@ -24,6 +24,13 @@ export type VaultIndex = {
   entrySection: Record<number, number>;
   /** Vault skill id (the derived index) → the section of the entry it came from. */
   skillSection: Record<number, number>;
+  /**
+   * Vault entry id → its nickname, when it has one. A private label for telling
+   * apart entries with the same title and employer; never printed.
+   */
+  entryNickname: Record<number, string>;
+  /** Vault skill id → the entry it came from, for that entry's nickname. */
+  skillEntry: Record<number, number>;
 };
 
 export function buildVaultIndex({
@@ -34,11 +41,17 @@ export function buildVaultIndex({
 }: {
   groups: Array<{ id: number; name: string }>;
   sections: Array<{ id: number; heading: string; groupId: number | null }>;
-  entries: Array<{ id: number; sectionId: number }>;
+  entries: Array<{ id: number; sectionId: number; nickname?: string }>;
   skills: Array<{ id: number; sourceEntryId: number }>;
 }): VaultIndex {
   const groupName = new Map(groups.map((g) => [g.id, g.name]));
-  const index: VaultIndex = { sections: {}, entrySection: {}, skillSection: {} };
+  const index: VaultIndex = {
+    sections: {},
+    entrySection: {},
+    skillSection: {},
+    entryNickname: {},
+    skillEntry: {},
+  };
 
   for (const s of sections) {
     index.sections[s.id] = {
@@ -46,8 +59,12 @@ export function buildVaultIndex({
       section: s.heading,
     };
   }
-  for (const e of entries) index.entrySection[e.id] = e.sectionId;
+  for (const e of entries) {
+    index.entrySection[e.id] = e.sectionId;
+    if (e.nickname?.trim()) index.entryNickname[e.id] = e.nickname.trim();
+  }
   for (const k of skills) {
+    index.skillEntry[k.id] = k.sourceEntryId;
     const sectionId = index.entrySection[k.sourceEntryId];
     if (sectionId !== undefined) index.skillSection[k.id] = sectionId;
   }
@@ -69,6 +86,18 @@ export function pathOfEntry(index: VaultIndex, entryId: number | null | undefine
 export function pathOfSkill(index: VaultIndex, skillId: number | null | undefined): VaultPath | null {
   if (skillId === null || skillId === undefined) return null;
   return pathOfSection(index, index.skillSection[skillId]);
+}
+
+/** An entry's nickname, or null. */
+export function nicknameOfEntry(index: VaultIndex, entryId: number | null | undefined): string | null {
+  if (entryId === null || entryId === undefined) return null;
+  return index.entryNickname[entryId] ?? null;
+}
+
+/** The nickname of the entry a derived skill came from, or null. */
+export function nicknameOfSkill(index: VaultIndex, skillId: number | null | undefined): string | null {
+  if (skillId === null || skillId === undefined) return null;
+  return nicknameOfEntry(index, index.skillEntry[skillId]);
 }
 
 /** "Work Experience → SDE Experience", for titles and plain-text contexts. */

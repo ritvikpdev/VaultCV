@@ -232,8 +232,8 @@ function BulletComposer({ entryId, first }: { entryId: number; first: boolean })
         className="w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-muted/70"
         placeholder={
           first
-            ? "Add your first achievement — start with a verb, include a number…"
-            : "Add another achievement…"
+            ? "Add a description line — start with a verb, include a number…"
+            : "Add another line…"
         }
         aria-label="New bullet"
         value={text}

@@ -26,7 +26,7 @@ import { groupSkillsForEditing, type ResolvedEntry, type ResolvedSection } from 
 import { SECTION_DEFS, getSectionDef } from "@/lib/sections";
 import { useSortable, type SortableHandleProps } from "@/lib/use-sortable";
 import { cn } from "@/lib/utils";
-import { pathOfEntry } from "@/lib/vault-path";
+import { nicknameOfEntry, pathOfEntry } from "@/lib/vault-path";
 
 import { addSection, removeSection } from "../actions";
 import { createBlankEntry } from "../editor-actions";
@@ -663,7 +663,7 @@ function EntryRows({
             </span>
             {source && (
               <span className="mt-0.5 flex min-w-0 text-[10px]">
-                <SectionPath path={source} />
+                <SectionPath path={source} nickname={nicknameOfEntry(index, entry.sourceEntryId)} />
               </span>
             )}
           </RowShell>

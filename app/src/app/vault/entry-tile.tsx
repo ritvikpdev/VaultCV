@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef } from "react";
-import { CalendarDays, GripVertical, MapPin, Pin } from "lucide-react";
+import { useRef, useState } from "react";
+import { CalendarDays, Copy, GripVertical, Loader2, MapPin, Pin } from "lucide-react";
 
+import { NicknameChip } from "@/components/section-path";
 import { StrengthMeter } from "@/components/ui";
 import type { EntryWithBullets } from "@/db/queries";
 import { STRENGTH_LABELS } from "@/lib/bullet-strength";
@@ -79,6 +80,7 @@ export function EntryTile({
   entry,
   isSkill,
   onOpen,
+  onDuplicate,
   dragging,
   register,
   handle,
@@ -86,6 +88,8 @@ export function EntryTile({
   entry: EntryWithBullets;
   isSkill: boolean;
   onOpen: () => void;
+  /** Copy this entry (and its bullets); resolves once the copy exists. */
+  onDuplicate: () => Promise<void>;
   dragging: boolean;
   register: (el: HTMLElement | null) => void;
   handle: SortableHandleProps;
@@ -93,6 +97,7 @@ export function EntryTile({
   // A drag that starts on the grip and ends over this same tile still fires a
   // click on it. Remember where the press began and ignore clicks that moved.
   const pressedAt = useRef<{ x: number; y: number } | null>(null);
+  const [duplicating, setDuplicating] = useState(false);
 
   const range = dateRange(entry);
   const pinned = entry.bullets.filter((b) => b.isPinned).length;
@@ -131,7 +136,10 @@ export function EntryTile({
       <div className="flex items-start gap-3">
         <EntryBadge name={entry.organization || entry.title} />
         <div className="min-w-0 flex-1">
-          <p className="line-clamp-2 font-semibold leading-snug">{entry.title}</p>
+          <p className="line-clamp-2 font-semibold leading-snug">
+            {entry.title}
+            {entry.nickname && <NicknameChip nickname={entry.nickname} className="align-middle" />}
+          </p>
           {!isSkill && entry.organization && (
             <p className="mt-0.5 truncate text-sm text-muted">{entry.organization}</p>
           )}
@@ -139,6 +147,22 @@ export function EntryTile({
             <p className="mt-0.5 text-sm capitalize text-muted">{entry.level}</p>
           )}
         </div>
+        <button
+          type="button"
+          // Its own click, not the tile's — the tile opens the entry.
+          onClick={(e) => {
+            e.stopPropagation();
+            if (duplicating) return;
+            setDuplicating(true);
+            void onDuplicate().finally(() => setDuplicating(false));
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+          className="shrink-0 rounded p-0.5 text-muted opacity-0 transition-opacity hover:text-ink focus:opacity-100 group-hover:opacity-100"
+          title="Duplicate"
+          aria-label={`Duplicate ${entry.title}`}
+        >
+          {duplicating ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}
+        </button>
         <span
           {...handle}
           onClick={(e) => e.stopPropagation()}

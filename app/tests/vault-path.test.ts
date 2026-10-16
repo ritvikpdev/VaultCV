@@ -8,6 +8,8 @@ import test, { describe } from "node:test";
 import {
   buildVaultIndex,
   formatPath,
+  nicknameOfEntry,
+  nicknameOfSkill,
   pathOfEntry,
   pathOfSection,
   pathOfSkill,
@@ -25,8 +27,8 @@ const index = buildVaultIndex({
     { id: 30, heading: "Old Section", groupId: null },
   ],
   entries: [
-    { id: 100, sectionId: 10 },
-    { id: 200, sectionId: 20 },
+    { id: 100, sectionId: 10, nickname: "  Backend focus " },
+    { id: 200, sectionId: 20, nickname: "" },
     { id: 300, sectionId: 30 },
   ],
   skills: [
@@ -60,5 +62,13 @@ describe("vault paths", () => {
 
   test("formats as group then section", () => {
     assert.equal(formatPath(pathOfSection(index, 11)!), "Work Experience → AI/ML Experience");
+  });
+
+  test("nicknames resolve for entries and the skills derived from them", () => {
+    assert.equal(nicknameOfEntry(index, 100), "Backend focus");
+    // An empty nickname is no nickname, not an empty chip.
+    assert.equal(nicknameOfEntry(index, 200), null);
+    assert.equal(nicknameOfSkill(index, 7), null);
+    assert.equal(nicknameOfEntry(index, null), null);
   });
 });

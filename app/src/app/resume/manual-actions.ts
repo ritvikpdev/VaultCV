@@ -411,7 +411,7 @@ export async function bulletOptionsForEntry(
 ): Promise<
   ActionResult<{
     sameEntry: Array<{ id: number; text: string; strength: number }>;
-    others: Array<{ id: number; text: string; strength: number; from: string }>;
+    others: Array<{ id: number; text: string; strength: number; from: string; nickname: string }>;
   }>
 > {
   return withVault(async () => {
@@ -447,6 +447,7 @@ export async function bulletOptionsForEntry(
           text: b.text,
           strength: b.strength,
           from: from ? `${from.title}${from.organization ? `, ${from.organization}` : ""}` : "",
+          nickname: from?.nickname ?? "",
         };
       });
 

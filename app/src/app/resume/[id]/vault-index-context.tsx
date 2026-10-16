@@ -16,6 +16,8 @@ const VaultIndexContext = createContext<VaultIndex>({
   sections: {},
   entrySection: {},
   skillSection: {},
+  entryNickname: {},
+  skillEntry: {},
 });
 
 export function VaultIndexProvider({

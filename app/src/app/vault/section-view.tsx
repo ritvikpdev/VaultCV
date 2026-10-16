@@ -10,7 +10,7 @@ import type { VaultGroup } from "@/db/schema";
 import { useSortable } from "@/lib/use-sortable";
 import { cn } from "@/lib/utils";
 
-import { createEntry, deleteSection, reorderEntries } from "./actions";
+import { createEntry, deleteSection, duplicateEntry, reorderEntries } from "./actions";
 import { EntryPanel } from "./entry-panel";
 import { EntryTile } from "./entry-tile";
 import type { MoveTargetGroup } from "./move-entry-dialog";
@@ -63,6 +63,27 @@ export function SectionView({
     next.delete("entry");
     window.history.replaceState(null, "", `?${next}`);
   }, []);
+
+  /**
+   * Copy an entry and open the copy. If its panel is open, the copy replaces
+   * it in place, so Back returns to the grid rather than to the original.
+   */
+  const duplicate = useCallback(
+    async (id: number) => {
+      const result = await duplicateEntry(id);
+      if (!result.ok) return;
+      const next = new URLSearchParams(window.location.search);
+      const panelOpen = next.has("entry");
+      next.set("entry", String(result.data));
+      if (panelOpen) {
+        window.history.replaceState(null, "", `?${next}`);
+      } else {
+        window.history.pushState(null, "", `?${next}`);
+        pushed.current = true;
+      }
+    },
+    [],
+  );
 
   const isSkill = section.type === "skill";
   const groupName = groups.find((g) => g.id === section.groupId)?.name ?? null;
@@ -123,7 +144,7 @@ export function SectionView({
             {section.entries.length === 0
               ? isSkill
                 ? "Skill lines — a label plus the skills under it"
-                : "Jobs, degrees, projects — anything with dates and achievements"
+                : "Jobs, degrees, projects — anything with dates and a description"
               : isSkill
                 ? `${section.entries.length} skill ${section.entries.length === 1 ? "line" : "lines"}`
                 : `${section.entries.length} ${section.entries.length === 1 ? "entry" : "entries"} · ${bulletCount} ${bulletCount === 1 ? "bullet" : "bullets"}`}
@@ -162,6 +183,7 @@ export function SectionView({
             entry={entry}
             isSkill={isSkill}
             onOpen={() => openEntry(entry.id)}
+            onDuplicate={() => duplicate(entry.id)}
             dragging={sort.draggingId === entry.id}
             register={sort.registerItem(entry.id)}
             handle={sort.handleProps(entry.id, "entries")}
@@ -192,6 +214,7 @@ export function SectionView({
           groupName={groupName}
           moveTargets={moveTargets}
           onClose={closeEntry}
+          onDuplicate={() => duplicate(openEntryData.id)}
         />
       )}
 

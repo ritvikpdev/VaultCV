@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 
 import { MenuItem, Popover } from "@/components/popover";
+import { RenameField } from "@/components/rename-field";
 import { Modal } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -133,47 +134,52 @@ export function ResumeHeader({
   return (
     <>
       <div className="flex flex-wrap items-center gap-2 rounded-card border border-line/70 bg-surface p-2 shadow-card">
-        <Popover
-          label="Switch resume"
-          triggerClassName="flex max-w-64 items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition-colors hover:bg-canvas"
-          trigger={
-            <>
-              <FileText size={16} className="shrink-0 text-accent" />
-              <span className="truncate">{name}</span>
-              <ChevronDown size={14} className="shrink-0 text-muted" />
-            </>
-          }
-          panelClassName="w-72"
-        >
-          {(close) => (
-            <div>
-              <p className="px-2.5 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                Your resumes
-              </p>
-              <div className="max-h-72 overflow-y-auto">
-                {resumes.map((r) => (
-                  <Link
-                    key={r.id}
-                    href={`/resume/${r.id}?tab=${activeTab}`}
-                    onClick={close}
-                    className={cn(
-                      "flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-canvas",
-                      r.id === resumeId && "font-medium",
-                    )}
-                  >
-                    <span className="flex-1 truncate">{r.name}</span>
-                    {r.id === resumeId && <Check size={14} className="text-violet" />}
-                  </Link>
-                ))}
+        {/* The name renames on click; the chevron beside it switches resume. */}
+        <div className="flex min-w-0 max-w-72 items-center">
+          <FileText size={16} className="ml-2 shrink-0 text-accent" />
+          <RenameField
+            value={name}
+            label="resume"
+            onSave={(next) => renameResume(resumeId, next)}
+            className="ml-1 px-2 py-1.5 text-sm font-semibold"
+            inputClassName="w-56"
+          />
+          <Popover
+            label="Switch resume"
+            triggerClassName="flex items-center rounded-lg p-1.5 text-muted transition-colors hover:bg-canvas hover:text-ink"
+            trigger={<ChevronDown size={15} />}
+            panelClassName="w-72"
+          >
+            {(close) => (
+              <div>
+                <p className="px-2.5 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  Your resumes
+                </p>
+                <div className="max-h-72 overflow-y-auto">
+                  {resumes.map((r) => (
+                    <Link
+                      key={r.id}
+                      href={`/resume/${r.id}?tab=${activeTab}`}
+                      onClick={close}
+                      className={cn(
+                        "flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-canvas",
+                        r.id === resumeId && "font-medium",
+                      )}
+                    >
+                      <span className="flex-1 truncate">{r.name}</span>
+                      {r.id === resumeId && <Check size={14} className="text-violet" />}
+                    </Link>
+                  ))}
+                </div>
+                <div className="mt-1 border-t border-line pt-1">
+                  <MenuItem icon={<Plus size={15} />} onClick={addResume} disabled={pending}>
+                    Add Resume
+                  </MenuItem>
+                </div>
               </div>
-              <div className="mt-1 border-t border-line pt-1">
-                <MenuItem icon={<Plus size={15} />} onClick={addResume} disabled={pending}>
-                  Add Resume
-                </MenuItem>
-              </div>
-            </div>
-          )}
-        </Popover>
+            )}
+          </Popover>
+        </div>
 
         <nav className="flex items-center gap-1 rounded-xl bg-canvas p-1" aria-label="Editor tabs">
           {TABS.map((t) => (

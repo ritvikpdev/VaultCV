@@ -178,6 +178,11 @@ Dev machines are **Windows**; production is Vercel + Supabase.
   `vault_skills` is a DERIVED index, rebuilt from that text on every save via
   `src/lib/skill-index.ts` — never edited by hand, never shown. It exists so the
   tuner can answer "do you have Kubernetes?" without searching prose.
+- **Nicknames are vault-only.** `vault_entries.nickname` tells apart entries
+  that share a title and employer. It shows in the vault, the resume's vault
+  picker, pulled entries' source tags and tuner suggestions, and is never
+  resolved into a resume, so it can't print. `updateEntry` treats an absent
+  nickname as "leave it" — callers like the tuner don't send one.
 - **Entries change section through a dialog, not a drag** — only one section is
   on screen at a time. `moveEntryToSection` refuses moves between a `normal` and
   a `skill` section, and the check lives in the action as well as the picker: an

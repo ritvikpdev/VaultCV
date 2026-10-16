@@ -46,7 +46,7 @@ function bullet(id: number, entryId: number, text: string, strength = 4): VaultB
 
 function entry(id: number, title: string, sectionHeading: string): VaultEntry & { sectionHeading: string } {
   return {
-    id, userId: USER, sectionId: 1, sectionHeading, title, organization: "Acme", location: "", startDate: "01/2022",
+    id, userId: USER, sectionId: 1, sectionHeading, title, nickname: "", organization: "Acme", location: "", startDate: "01/2022",
     endDate: "01/2024", isCurrent: false, url: "", subtitle: "", information: "", level: "", meta: {},
     displayOrder: id, isArchived: false, createdAt: 0, updatedAt: 0,
   };

@@ -288,5 +288,6 @@ ALTER TABLE "resume_entries" ADD COLUMN "url_override" text;
 ALTER TABLE "resume_entries" ADD COLUMN "meta_override" jsonb;
 ALTER TABLE "resume_sections" ADD COLUMN "icon" text;
 ALTER TABLE "resume_sections" ADD COLUMN "options" jsonb DEFAULT '{}'::jsonb NOT NULL;
+ALTER TABLE "vault_entries" ADD COLUMN "nickname" text DEFAULT '' NOT NULL;
 
 commit;

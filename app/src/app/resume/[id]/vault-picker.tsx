@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { Check, ChevronLeft } from "lucide-react";
 
-import { SectionPath } from "@/components/section-path";
+import { NicknameChip, SectionPath } from "@/components/section-path";
 import { Modal, StrengthMeter } from "@/components/ui";
 import type { VaultBullet, VaultEntry, VaultSection, VaultSkill } from "@/db/schema";
 
@@ -57,20 +57,23 @@ export function VaultPicker({
 
   const [activeSectionId, setActiveSectionId] = useState<number | null>(null);
 
-  // Bullet selection per entry. Defaults to every bullet checked — pulling a job
-  // and then trimming is the common motion; opting each bullet in is not.
-  const [selected, setSelected] = useState<Record<number, Set<number>>>(() =>
-    Object.fromEntries(
-      entries.map((e) => [e.id, new Set(e.bullets.map((b) => b.id))]),
-    ),
-  );
+  // Bullet selection per entry. Starts empty: which bullets fit a resume is the
+  // user's call, so nothing is opted in for them. "Select all" covers the case
+  // where they do want the whole job.
+  const [selected, setSelected] = useState<Record<number, Set<number>>>({});
   const [pickedSkills, setPickedSkills] = useState<Set<number>>(new Set());
   const [pending, startTransition] = useTransition();
 
   function close() {
     setActiveSectionId(null);
     setPickedSkills(new Set());
+    // Every opening starts with nothing ticked, not the last selection.
+    setSelected({});
     onClose();
+  }
+
+  function setAll(entryId: number, bulletIds: number[]) {
+    setSelected((prev) => ({ ...prev, [entryId]: new Set(bulletIds) }));
   }
 
   function toggleBullet(entryId: number, bulletId: number) {
@@ -296,6 +299,7 @@ export function VaultPicker({
                           , {entry.organization}
                         </span>
                       )}
+                      {entry.nickname && <NicknameChip nickname={entry.nickname} className="align-middle" />}
                     </p>
                     <p className="hint mt-0.5">
                       {[entry.startDate, entry.isCurrent ? "Present" : entry.endDate]
@@ -315,13 +319,35 @@ export function VaultPicker({
                       disabled={pending}
                       onClick={() => addEntry(entry.id)}
                     >
-                      Add with {picked.size} bullet{picked.size === 1 ? "" : "s"}
+                      {picked.size === 0
+                        ? "Add without bullets"
+                        : `Add with ${picked.size} bullet${picked.size === 1 ? "" : "s"}`}
                     </button>
                   )}
                 </div>
 
                 {!alreadyUsed && entry.bullets.length > 0 && (
-                  <ul className="mt-3 space-y-1.5">
+                  <div className="mt-3 flex items-center justify-between">
+                    <span className="hint">
+                      {picked.size} of {entry.bullets.length} selected
+                    </span>
+                    <button
+                      type="button"
+                      className="text-xs font-medium text-violet hover:underline"
+                      onClick={() =>
+                        setAll(
+                          entry.id,
+                          picked.size === entry.bullets.length ? [] : entry.bullets.map((b) => b.id),
+                        )
+                      }
+                    >
+                      {picked.size === entry.bullets.length ? "Clear" : "Select all"}
+                    </button>
+                  </div>
+                )}
+
+                {!alreadyUsed && entry.bullets.length > 0 && (
+                  <ul className="mt-2 space-y-1.5">
                     {entry.bullets.map((b) => (
                       <li key={b.id} className="flex items-start gap-2 text-sm">
                         <input

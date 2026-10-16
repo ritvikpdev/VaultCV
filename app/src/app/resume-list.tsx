@@ -5,10 +5,11 @@ import Link from "next/link";
 import { useState, useTransition } from "react";
 import { Copy, Plus, Trash2 } from "lucide-react";
 
+import { RenameField } from "@/components/rename-field";
 import { ConfirmButton } from "@/components/ui";
 import type { Resume } from "@/db/schema";
 
-import { createResume, deleteResume, duplicateResume } from "./resume/actions";
+import { createResume, deleteResume, duplicateResume, renameResume } from "./resume/actions";
 
 function relativeDate(unixSeconds: number): string {
   const days = Math.floor((Date.now() / 1000 - unixSeconds) / 86400);
@@ -64,8 +65,14 @@ export function ResumeList({ resumes }: { resumes: Resume[] }) {
         <div className="mt-8 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {resumes.map((r) => (
             <div key={r.id} className="card group relative p-5">
+              {/* Clicking the name renames it; the rest of the card opens the resume. */}
+              <RenameField
+                value={r.name}
+                label="resume"
+                onSave={(next) => renameResume(r.id, next)}
+                className="-ml-1.5 max-w-[calc(100%-4.5rem)] px-1.5 py-0.5 font-medium"
+              />
               <Link href={`/resume/${r.id}?tab=content`} className="block">
-                <p className="font-medium">{r.name}</p>
                 <p className="hint mt-1">
                   {[r.targetRole, r.targetCompany].filter(Boolean).join(" · ") ||
                     "No target set"}
