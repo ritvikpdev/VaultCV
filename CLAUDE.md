@@ -6,7 +6,8 @@ compositions drawn from it; the **tuner** reads a job description and
 recommends changes.
 
 App lives in `app/`, deployed on Vercel against one Supabase project (Postgres +
-Auth). Background and rationale: `DESIGN.md`. Setup: `README.md`.
+Auth). Background and rationale: `DESIGN.md` (kept locally, gitignored — not in the
+repo). Setup: `README.md`.
 
 ---
 
